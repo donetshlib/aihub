@@ -122,6 +122,20 @@
           <button type="button" id="history-clear" class="ghost-wide" data-i18n="clearHistory"></button>
         </section>
 
+        <section id="view-edit" hidden>
+          <form id="edit-form">
+            <label class="field"><span data-i18n="name"></span><input id="edit-name" maxlength="60" /></label>
+          </form>
+          <p class="hint" id="edit-name-hint" data-i18n="sectionNameHint"></p>
+          <p class="caption" data-i18n="icon"></p>
+          <div class="edit-icon">
+            <span id="edit-icon-preview" class="preset-icon"></span>
+            <button type="button" id="edit-icon-choose" class="ghost-wide" data-i18n="chooseIcon"></button>
+            <button type="button" id="edit-icon-reset" class="ghost-wide" data-i18n="resetIcon"></button>
+          </div>
+          <p class="hint" data-i18n="iconHint"></p>
+        </section>
+
         <section id="view-bookmarks" hidden>
           <div id="bookmark-list" class="link-list"></div>
         </section>

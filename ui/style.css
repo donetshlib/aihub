@@ -1144,3 +1144,32 @@ html.suggest-page body {
 .section-toggle:hover {
   color: var(--text);
 }
+
+/* Service name and icon */
+.edit-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.edit-icon .ghost-wide {
+  margin-top: 0;
+}
+
+#edit-icon-preview {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.service-row .edit {
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-radius: 6px;
+}
+
+.service-row .edit:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}

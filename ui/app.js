@@ -5,6 +5,7 @@ const { send, on } = window.hub;
 let state = null;
 let view = null; // a key of TITLES, or null
 let lang = null;
+let editing = null; // id of the service in the edit view
 const rendered = {};
 
 const t = (key, vars) => translate(lang, key, vars);
@@ -255,7 +256,7 @@ function dragDivider(event, i) {
 /* ---------- Side panel ---------- */
 
 const TITLES = {
-  add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions', history: 'history', bookmarks: 'bookmarks',
+  add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions', history: 'history', bookmarks: 'bookmarks', edit: 'editService',
 };
 
 function setView(next) {
@@ -270,15 +271,16 @@ const toggleView = (next) => setView(view === next ? null : next);
 
 function renderPanel() {
   $('panel').hidden = !view;
-  const data = [view, state.services, state.presets, state.settings, state.downloads, state.extensions, state.history, state.bookmarks];
+  const data = [view, editing, state.services, state.presets, state.settings, state.downloads, state.extensions, state.history, state.bookmarks];
   if (!view || !changed('view', data)) return;
-  $('panel-title').textContent = t(TITLES[view]);
+  $('panel-title').textContent = t(TITLES[view]).replace(/…$/, ''); // a menu item's "…" is not part of the title
   for (const kind of Object.keys(TITLES)) $(`view-${kind}`).hidden = kind !== view;
   if (view === 'add') renderPresets();
   if (view === 'settings') renderSettings();
   if (view === 'downloads') renderDownloads();
   if (view === 'extensions') renderExtensions();
   if (view === 'history') renderLinks($('history-list'), state.history, 'removeHistory', t('noHistory'), true);
+  if (view === 'edit') renderEdit();
   if (view === 'bookmarks') renderLinks($('bookmark-list'), state.bookmarks, 'removeBookmark', t('noBookmarks'));
 }
 
@@ -330,6 +332,22 @@ function markSegment(seg, value) {
   for (const btn of seg.children) btn.classList.toggle('on', btn.dataset.value === String(value));
 }
 
+function renderEdit() {
+  const s = state.services.find((x) => x.id === editing);
+  if (!s) return setView(null);
+  if (document.activeElement !== $('edit-name')) $('edit-name').value = s.parent && !s.named ? '' : s.name;
+  $('edit-name').placeholder = s.label;
+  $('edit-name-hint').hidden = !s.parent;
+  $('edit-icon-preview').replaceWith(Object.assign(icon(s.icon, s.label, 'preset-icon'), { id: 'edit-icon-preview' }));
+  $('edit-icon-reset').disabled = !s.customIcon;
+}
+
+function openEdit(id) {
+  editing = id;
+  setView('edit');
+  $('edit-name').focus();
+}
+
 function renderSettings() {
   $('lang').value = lang;
   markSegment($('theme-seg'), state.settings.theme);
@@ -340,6 +358,7 @@ function renderSettings() {
   },
   icon(s.icon, s.name, 'row-icon'),
   el('span', { className: 'row-name', textContent: s.name }),
+  el('button', { type: 'button', className: 'edit', textContent: '✎', title: t('editService'), onclick: () => openEdit(s.id) }),
   el('button', {
     type: 'button',
     className: 'pin' + (s.neverUnload ? ' on' : ''),
@@ -454,6 +473,8 @@ on('state', (next) => {
   renderPanel();
 });
 
+on('edit', openEdit);
+
 on('cmd', (cmd) => {
   if (cmd === 'find') openFind();
   if (cmd === 'history') toggleView('history');
@@ -480,6 +501,15 @@ $('history-btn').onclick = () => toggleView('history');
 $('star').onclick = () => send('toggleBookmark');
 $('history-search').oninput = (e) => send('historySearch', e.target.value);
 $('history-clear').onclick = () => send('clearHistory');
+const rename = () => send('renameService', { id: editing, name: $('edit-name').value });
+$('edit-name').onchange = rename;
+$('edit-form').onsubmit = (e) => {
+  e.preventDefault();
+  rename();
+  setView(null);
+};
+$('edit-icon-choose').onclick = () => send('chooseServiceIcon', editing);
+$('edit-icon-reset').onclick = () => send('resetServiceIcon', editing);
 $('open-web-store').onclick = () => {
   send('openWebStore');
   setView(null);

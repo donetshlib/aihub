@@ -460,11 +460,13 @@ function render() {
       const list = serviceTabs(s.id);
       return {
         ...s,
-        icon: list.find((t) => t.favicon)?.favicon ?? favicon(s.url),
+        icon: s.icon ?? list.find((t) => t.favicon)?.favicon ?? favicon(s.url),
+        customIcon: !!s.icon,
         count: list.reduce((sum, t) => sum + titleCount(t.title), 0),
         unread: list.some((t) => t.unread),
         sleeping: !list.some((t) => t.view),
-        label: s.parent ? (tabs.get(lastTab[s.id]) ?? list[0])?.title || s.name : s.name,
+        // A section is named after the chat open in it, until it is given a name.
+        label: s.parent && !s.named ? (tabs.get(lastTab[s.id]) ?? list[0])?.title || s.name : s.name,
       };
     }),
     presets: [{ name: t('browser'), url: '' }, ...PRESETS].map((p) => ({ ...p, icon: favicon(p.url) })),
@@ -1069,6 +1071,7 @@ function serviceMenu(id) {
     { label: t('unloadService'), enabled: awake.length > 0, click: () => unload(awake) },
     separator,
     { label: t('signOut'), click: () => signOut([id], t('confirmSignOut', { name: service.name })) },
+    { label: t('editService'), click: () => ui.send('edit', id) },
     { label: t(service.parent ? 'removeSection' : 'removeService'), click: () => removeService(id) },
   ]);
 }
@@ -1158,6 +1161,38 @@ const actions = {
   addService,
   removeService,
   toggleNeverUnload,
+  renameService: ({ id, name }) => {
+    const service = serviceById(id);
+    name = String(name ?? '').trim().slice(0, 60);
+    if (!service || (!name && !service.parent)) return;
+    if (name) service.name = name;
+    if (service.parent) service.named = !!name; // emptied: back to the chat's title
+    save('services.json', services);
+    render();
+  },
+  // Kept in services.json as a 64px PNG data URL: the file itself may move or vanish.
+  chooseServiceIcon: async (id) => {
+    const service = serviceById(id);
+    if (!service) return;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      properties: ['openFile'],
+      filters: [{ name: t('images'), extensions: ['png', 'jpg', 'jpeg', 'ico'] }],
+    });
+    if (canceled || !filePaths[0]) return;
+    const image = nativeImage.createFromPath(filePaths[0]);
+    if (image.isEmpty()) return dialog.showMessageBox(win, { type: 'error', message: t('badImage') });
+    const { width, height } = image.getSize();
+    service.icon = image.resize({ [width >= height ? 'width' : 'height']: 64, quality: 'best' }).toDataURL();
+    save('services.json', services);
+    render();
+  },
+  resetServiceIcon: (id) => {
+    const service = serviceById(id);
+    if (!service) return;
+    delete service.icon;
+    save('services.json', services);
+    render();
+  },
   toggleSections: (id) => {
     const service = serviceById(id);
     if (!service) return;
