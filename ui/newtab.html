@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <!-- The new tab of a browser service: empty, in the app's background colour; typing goes to the address bar. -->
+    <script>
+      const query = new URLSearchParams(location.search);
+      document.title = query.get('title') ?? '';
+      document.documentElement.style.background = { light: '#f0f0f0', original: '#10162a' }[query.get('theme')] ?? '#1e1e1e';
+    </script>
+  </head>
+  <body></body>
+</html>

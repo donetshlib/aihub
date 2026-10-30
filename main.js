@@ -4,6 +4,7 @@
 // renders the snapshot it is sent.
 const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, nativeImage, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const fs = require('node:fs');
 const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store');
@@ -19,6 +20,8 @@ const GAP = 6;
 const PANEL = 380;
 const MAX_PANES = 3;
 const ERROR_PAGE = path.join(__dirname, 'ui', 'error.html');
+const NEW_TAB = path.join(__dirname, 'ui', 'newtab.html');
+const NEW_TAB_URL = pathToFileURL(NEW_TAB).href;
 const WEB_STORE = 'https://chromewebstore.google.com/category/extensions';
 
 const PRESETS = [
@@ -112,7 +115,7 @@ const topServices = () => services.filter((s) => !s.parent);
 const t = (key, vars) => translate(settings.lang, key, vars);
 const current = () => tabs.get(panes[focused]);
 const currentContents = () => current()?.view?.webContents;
-const favicon = (url) => `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=64`;
+const favicon = (url) => (url ? `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=64` : null);
 const openExternal = (url) => /^https?:/i.test(url) && shell.openExternal(url);
 const confirm = (message) =>
   dialog.showMessageBoxSync(win, { type: 'question', buttons: [t('yes'), t('cancel')], defaultId: 1, cancelId: 1, message }) === 0;
@@ -143,7 +146,8 @@ function ensureView(tab) {
 
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
-    if (!isErrorPage(wc)) {
+    if (wc.getURL().startsWith(NEW_TAB_URL)) tab.url = '';
+    else if (!isErrorPage(wc)) {
       tab.url = wc.getURL() || tab.url;
       tab.translated = false;
       remember(tab);
@@ -192,17 +196,22 @@ function ensureView(tab) {
   });
 
   win.contentView.addChildView(view);
-  wc.loadURL(tab.url);
+  openPage(wc, tab.url);
   return view;
 }
 
 const isErrorPage = (wc) => wc.getURL().startsWith('file:');
 
+function openPage(wc, url) {
+  if (url) wc.loadURL(url);
+  else wc.loadFile(NEW_TAB, { query: { theme: settings.theme, title: t('newTab') } });
+}
+
 // Reloading the error page would only show it again, so the failed address is loaded instead.
 function reload(tab) {
   const wc = tab?.view?.webContents;
   if (!wc) return tab && showTab(tab);
-  if (isErrorPage(wc)) wc.loadURL(tab.url);
+  if (isErrorPage(wc) && tab.url) wc.loadURL(tab.url);
   else wc.reload();
 }
 
@@ -230,12 +239,20 @@ function showTab(tab) {
 
 function selectService(id) {
   const service = serviceById(id);
-  if (service) showTab(tabs.get(lastTab[id]) ?? serviceTabs(id)[0] ?? makeTab(id, service.url));
+  if (!service) return;
+  const tab = tabs.get(lastTab[id]) ?? serviceTabs(id)[0];
+  if (tab) showTab(tab);
+  else newTab(id);
 }
 
 function newTab(serviceId = current()?.serviceId ?? services[0]?.id) {
   const service = serviceById(serviceId);
-  if (service) showTab(makeTab(service.id, service.url));
+  if (!service) return;
+  showTab(makeTab(service.id, service.url));
+  if (!service.url) {
+    ui.focus();
+    ui.send('cmd', 'address');
+  }
 }
 
 function closeTab(id) {
@@ -450,7 +467,7 @@ function render() {
         label: s.parent ? (tabs.get(lastTab[s.id]) ?? list[0])?.title || s.name : s.name,
       };
     }),
-    presets: PRESETS.map((p) => ({ ...p, icon: favicon(p.url) })),
+    presets: [{ name: t('browser'), url: '' }, ...PRESETS].map((p) => ({ ...p, icon: favicon(p.url) })),
     activeService: tab?.serviceId ?? null,
     tabs: tab
       ? serviceTabs(tab.serviceId).map((t) => ({
@@ -480,18 +497,18 @@ function render() {
 /* ---------- Services ---------- */
 
 function addService({ name, url }) {
-  let parsed;
+  let parsed = null; // none for a browser service
   try {
-    parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    if (url) parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
   } catch {
     return;
   }
-  name = String(name || parsed.hostname).trim();
+  name = String(name || parsed?.hostname || t('browser')).trim();
   // Adding the same service twice is how a second account is made, so names stay distinct.
   const same = services.filter((s) => s.name === name || s.name.startsWith(`${name} `)).length;
   if (same) name = `${name} ${same + 1}`;
-  const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`;
-  services.push({ id, name, url: parsed.href, neverUnload: false });
+  const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'browser'}-${Date.now().toString(36)}`;
+  services.push({ id, name, url: parsed?.href ?? '', neverUnload: false });
   save('services.json', services);
   selectService(id);
 }
