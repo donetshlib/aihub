@@ -9,7 +9,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win",
-    "release": "electron-builder --win --publish always"
+    "release": "node release.js"
   },
   "devDependencies": {
     "electron": "^44.9.0",
