@@ -2,7 +2,7 @@
 <html lang="ru" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: crx:; style-src 'self' 'unsafe-inline'" />
     <title>AI Hub</title>
     <link rel="stylesheet" href="style.css" />
     <script src="i18n.js" defer></script>
@@ -34,6 +34,8 @@
           <button id="find-next" data-i18n-title="findNext" data-hotkey="Enter">↓</button>
           <button id="find-close" data-i18n-title="close" data-hotkey="Esc">✕</button>
         </div>
+        <browser-action-list id="actions"></browser-action-list>
+        <button id="extensions-btn" data-i18n-title="extensions">🧩</button>
         <button id="downloads-btn" data-i18n-title="downloads">⬇<span id="dl-badge" hidden></span></button>
       </div>
     </header>
@@ -102,6 +104,12 @@
 
           <p class="caption" data-i18n="hotkeys"></p>
           <p class="hint" data-i18n="hotkeysList"></p>
+        </section>
+
+        <section id="view-extensions" hidden>
+          <div id="ext-list"></div>
+          <button type="button" id="open-web-store" class="ghost-wide" data-i18n="openWebStore"></button>
+          <p class="hint" data-i18n="extensionsHint"></p>
         </section>
 
         <section id="view-downloads" hidden>

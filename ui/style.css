@@ -993,3 +993,36 @@ body.dragging {
 #dl-dir-change:hover {
   background: var(--surface-hover);
 }
+
+/* Chrome extensions: toolbar buttons and the panel list */
+#actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#actions[hidden] {
+  display: none;
+}
+
+#actions::part(action) {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background-size: 18px;
+}
+
+#actions::part(action):hover {
+  background-color: var(--surface-hover);
+}
+
+.service-row .ext-btn {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.service-row .ext-btn:hover {
+  background: var(--surface-hover);
+}

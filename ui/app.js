@@ -144,6 +144,19 @@ function renderTabs(force) {
 
 function renderNav() {
   const nav = state.nav;
+  // Toolbar buttons of the extensions, for the tab on screen. The element subscribes to the
+  // partition it has when it is attached, so a new one is made instead of changing attributes.
+  // Also after an install: an icon asked for before the extension was ready is never retried.
+  $('actions').hidden = !nav?.contentsId;
+  const key = `${nav?.contentsId} ${state.extensions.map((ext) => ext.id + ext.version)}`;
+  if (nav?.contentsId && $('actions').dataset.key !== key) {
+    const list = document.createElement('browser-action-list');
+    list.id = 'actions';
+    list.dataset.key = key;
+    list.setAttribute('partition', nav.partition);
+    list.setAttribute('tab', nav.contentsId);
+    $('actions').replaceWith(list);
+  }
   $('back').disabled = !nav?.canBack;
   $('forward').disabled = !nav?.canForward;
   $('reload').disabled = !nav;
@@ -217,7 +230,7 @@ function dragDivider(event, i) {
 
 /* ---------- Side panel ---------- */
 
-const TITLES = { add: 'newService', settings: 'settings', downloads: 'downloads' };
+const TITLES = { add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions' };
 
 function setView(next) {
   view = next;
@@ -231,12 +244,13 @@ const toggleView = (next) => setView(view === next ? null : next);
 
 function renderPanel() {
   $('panel').hidden = !view;
-  if (!view || !changed('view', [view, state.services, state.presets, state.settings, state.downloads])) return;
+  if (!view || !changed('view', [view, state.services, state.presets, state.settings, state.downloads, state.extensions])) return;
   $('panel-title').textContent = t(TITLES[view]);
   for (const kind of Object.keys(TITLES)) $(`view-${kind}`).hidden = kind !== view;
   if (view === 'add') renderPresets();
   if (view === 'settings') renderSettings();
   if (view === 'downloads') renderDownloads();
+  if (view === 'extensions') renderExtensions();
 }
 
 function renderPresets() {
@@ -272,6 +286,18 @@ function renderSettings() {
     onclick: () => send('toggleNeverUnload', s.id),
   }),
   el('button', { type: 'button', className: 'del', textContent: '✕', title: t('remove'), onclick: () => send('removeService', s.id) }))));
+}
+
+function renderExtensions() {
+  if (!state.extensions.length) {
+    $('ext-list').replaceChildren(el('p', { className: 'hint', textContent: t('noExtensions') }));
+    return;
+  }
+  $('ext-list').replaceChildren(...state.extensions.map((ext) => el('div', { className: 'service-row' },
+    icon(ext.icon, ext.name, 'row-icon'),
+    el('span', { className: 'row-name', textContent: ext.name, title: `${ext.name} ${ext.version}` }),
+    ext.options ? el('button', { type: 'button', className: 'ext-btn', textContent: t('options'), onclick: () => send('extensionOptions', ext.id) }) : '',
+    el('button', { type: 'button', className: 'del', textContent: '✕', title: t('remove'), onclick: () => send('removeExtension', ext.id) }))));
 }
 
 function renderDownloads() {
@@ -384,6 +410,11 @@ $('lang').onchange = (e) => send('setting', { key: 'lang', value: e.target.value
 $('add-btn').onclick = () => toggleView('add');
 $('settings-btn').onclick = () => toggleView('settings');
 $('downloads-btn').onclick = () => toggleView('downloads');
+$('extensions-btn').onclick = () => toggleView('extensions');
+$('open-web-store').onclick = () => {
+  send('openWebStore');
+  setView(null);
+};
 $('close-btn').onclick = () => setView(null);
 $('add-cancel').onclick = () => setView(null);
 $('new-tab').onclick = () => send('newTab');

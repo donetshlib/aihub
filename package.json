@@ -1,14 +1,15 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win --publish always"
   },
   "devDependencies": {
     "electron": "^44.9.0",
@@ -44,6 +45,18 @@
         "lt_LT"
       ],
       "warningsAsErrors": false
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "donetshlib",
+        "repo": "aihub"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-chrome-extensions": "^4.10.0",
+    "electron-chrome-web-store": "^0.13.0",
+    "electron-updater": "^6.8.11"
   }
 }

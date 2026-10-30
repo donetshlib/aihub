@@ -2,9 +2,12 @@
 // The window's own page (ui/) draws the sidebar, tab strip, toolbar and side panel; every tab
 // is a WebContentsView laid over the content area. All tab state lives here, the UI only
 // renders the snapshot it is sent.
-const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, nativeImage, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { ElectronChromeExtensions } = require('electron-chrome-extensions');
+const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store');
+const { autoUpdater } = require('electron-updater');
 const { LANGS, translate } = require('./ui/i18n.js');
 
 // Must match the sizes in ui/style.css.
@@ -15,6 +18,7 @@ const GAP = 6;
 const PANEL = 380;
 const MAX_PANES = 3;
 const ERROR_PAGE = path.join(__dirname, 'ui', 'error.html');
+const WEB_STORE = 'https://chromewebstore.google.com/category/extensions';
 
 const PRESETS = [
   { name: 'Claude', url: 'https://claude.ai' },
@@ -52,6 +56,9 @@ const downloadItems = new Map();
 let nextDownloadId = 1;
 const inflight = new Map(); // webContents id -> Map of request id -> start time
 const wiredSessions = new Set();
+const chromeExtensions = new Map(); // session -> ElectronChromeExtensions
+const extensionIcons = new Map(); // extension path -> NativeImage
+let selectedContents = null; // the tab the extensions were last told is active
 
 /* ---------- Files ---------- */
 
@@ -107,6 +114,7 @@ function ensureView(tab) {
   const wc = view.webContents;
   tab.view = view;
   wireSession(wc.session);
+  chromeExtensions.get(wc.session).addTab(wc, win);
 
   wc.setWindowOpenHandler(({ url, disposition }) => {
     // window.open with a size is a real popup (OAuth sign-in): it needs window.opener to work.
@@ -289,6 +297,10 @@ function render() {
   if (tab) lastTab[tab.serviceId] = tab.id;
   win.setTitle(tab?.title ? `${tab.title} — AI Hub` : 'AI Hub');
   const wc = tab?.view?.webContents;
+  if (wc && wc !== selectedContents) {
+    selectedContents = wc;
+    chromeExtensions.get(wc.session)?.selectTab(wc);
+  }
   ui.send('state', {
     services: services.map((s) => {
       const list = serviceTabs(s.id);
@@ -309,8 +321,12 @@ function render() {
       : [],
     panes: rects.map((r, i) => ({ id: panes[i], title: tabs.get(panes[i]).title, x: r.x, width: r.width, focused: i === focused })),
     nav: tab
-      ? { url: tab.url, loading: tab.loading, canBack: !!wc?.navigationHistory.canGoBack(), canForward: !!wc?.navigationHistory.canGoForward() }
+      ? {
+          url: tab.url, loading: tab.loading, canBack: !!wc?.navigationHistory.canGoBack(), canForward: !!wc?.navigationHistory.canGoForward(),
+          partition: `persist:${tab.serviceId}`, contentsId: wc?.id ?? null,
+        }
       : null,
+    extensions: listExtensions(wc?.session),
     downloads,
     settings: {
       theme: settings.theme, unloadMinutes: settings.unloadMinutes, lang: settings.lang,
@@ -378,6 +394,7 @@ function wireSession(ses) {
   if (wiredSessions.has(ses)) return;
   wiredSessions.add(ses);
   setSiteLanguage(ses);
+  wireExtensions(ses);
 
   // Without setSavePath Electron shows the regular "Save as" dialog.
   ses.on('will-download', (_, item) => {
@@ -533,6 +550,108 @@ function unloadIdleTabs() {
   saveSession();
 }
 
+/* ---------- Chrome extensions ---------- */
+
+// Extensions are installed once into a shared folder and loaded into every service's profile.
+// Whatever one profile loads or drops (install, update, uninstall) is mirrored to the others.
+const extensionsDir = () => path.join(app.getPath('userData'), 'Extensions');
+const tabOf = (wc) => [...tabs.values()].find((tab) => tab.view?.webContents === wc);
+const serviceOf = (ses) => services.find((s) => session.fromPartition(`persist:${s.id}`) === ses);
+
+function wireExtensions(ses) {
+  chromeExtensions.set(ses, new ElectronChromeExtensions({
+    session: ses,
+    createTab: async (details) => {
+      const service = serviceOf(ses);
+      const tab = makeTab(service.id, details.url || service.url);
+      if (details.active === false) ensureView(tab);
+      else showTab(tab);
+      render();
+      return [tab.view.webContents, win];
+    },
+    selectTab: (wc) => tabOf(wc) && showTab(tabOf(wc)),
+    removeTab: (wc) => tabOf(wc) && closeTab(tabOf(wc).id),
+    createWindow: async (details) => {
+      const popup = new BrowserWindow({
+        width: details.width ?? 800,
+        height: details.height ?? 600,
+        autoHideMenuBar: true,
+        webPreferences: { session: ses },
+      });
+      const url = [details.url ?? []].flat()[0];
+      if (url) popup.loadURL(url);
+      return popup;
+    },
+  }));
+
+  ses.extensions.on('extension-loaded', (_, ext) => {
+    for (const other of chromeExtensions.keys()) {
+      if (other !== ses && !other.extensions.getExtension(ext.id)) other.extensions.loadExtension(ext.path).catch(() => {});
+    }
+    render();
+  });
+  // Same path only: during an update the new version is already loading under the same id.
+  ses.extensions.on('extension-unloaded', (_, ext) => {
+    for (const other of chromeExtensions.keys()) {
+      if (other.extensions.getExtension(ext.id)?.path === ext.path) other.extensions.removeExtension(ext.id);
+    }
+    render();
+  });
+
+  installChromeWebStore({
+    session: ses,
+    extensionsPath: extensionsDir(),
+    autoUpdate: chromeExtensions.size === 1, // one profile checks for updates, the mirroring does the rest
+    beforeInstall: async ({ localizedName }) => {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: [t('install'), t('cancel')],
+        defaultId: 0,
+        cancelId: 1,
+        message: t('installExtension', { name: localizedName }),
+        detail: t('extensionsHint'),
+      });
+      return { action: response === 0 ? 'allow' : 'deny' };
+    },
+  }).catch((error) => console.error('Chrome Web Store:', error));
+}
+
+function listExtensions(ses = chromeExtensions.keys().next().value) {
+  if (!ses) return [];
+  return ses.extensions.getAllExtensions().map((ext) => {
+    const options = ext.manifest.options_ui?.page ?? ext.manifest.options_page;
+    return { id: ext.id, name: ext.name, version: ext.version, icon: extensionIcon(ext)?.toDataURL() ?? null, options: !!options };
+  });
+}
+
+// The biggest icon from the manifest, scaled to 32px.
+function extensionIcon(ext) {
+  if (!extensionIcons.has(ext.path)) {
+    const icons = ext.manifest.icons ?? {};
+    const best = Object.keys(icons).sort((a, b) => b - a)[0];
+    extensionIcons.set(ext.path, best ? nativeImage.createFromPath(path.join(ext.path, icons[best])).resize({ width: 32 }) : null);
+  }
+  return extensionIcons.get(ext.path);
+}
+
+// Toolbar icons for <browser-action-list>. The library fails the request when an extension has no
+// default action icon and set none for this tab (Stylus); Chrome shows the manifest icon then.
+function handleExtensionIcons() {
+  session.defaultSession.protocol.handle('crx', async (request) => {
+    const url = new URL(request.url);
+    const ses = session.fromPartition(url.searchParams.get('partition') ?? '');
+    const response = await chromeExtensions.get(ses)?.api.browserAction.handleCRXRequest(request);
+    if (response?.ok) return response;
+    const ext = ses.extensions.getExtension(url.pathname.split('/')[1]);
+    const icon = ext && extensionIcon(ext);
+    return icon ? new Response(icon.toPNG(), { headers: { 'Content-Type': 'image/png' } }) : new Response(null, { status: 404 });
+  });
+}
+
+function extensionSession() {
+  return currentContents()?.session ?? chromeExtensions.keys().next().value;
+}
+
 /* ---------- Input and menus ---------- */
 
 function toUrl(text) {
@@ -580,6 +699,7 @@ const separator = { type: 'separator' };
 
 function pageMenu(tab, p) {
   const wc = tab.view.webContents;
+  const fromExtensions = chromeExtensions.get(wc.session)?.getContextMenuItems(wc, p) ?? [];
   const items = p.dictionarySuggestions.map((word) => ({ label: word, click: () => wc.replaceMisspelling(word) }));
   if (p.misspelledWord) items.push({ label: t('addToDictionary'), click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) }, separator);
   if (p.linkURL) {
@@ -612,6 +732,7 @@ function pageMenu(tab, p) {
     { label: t('forward'), enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
     { label: t('reload'), click: () => reload(tab) },
     separator,
+    ...(fromExtensions.length ? [...fromExtensions, separator] : []),
     { label: t('inspect'), click: () => wc.inspectElement(p.x, p.y) },
   );
   popup(items);
@@ -732,6 +853,30 @@ const actions = {
     render();
   },
   openDownloadDir: () => shell.openPath(downloadDir()),
+  openWebStore: () => {
+    const service = current()?.serviceId ?? services[0]?.id;
+    if (service) showTab(makeTab(service, WEB_STORE));
+  },
+  extensionOptions: (id) => {
+    const ext = extensionSession()?.extensions.getExtension(id);
+    const page = ext && (ext.manifest.options_ui?.page ?? ext.manifest.options_page);
+    const service = current()?.serviceId ?? services[0]?.id;
+    if (page && service) showTab(makeTab(service, `chrome-extension://${id}/${page}`));
+  },
+  removeExtension: async (id) => {
+    const ses = extensionSession();
+    const ext = ses?.extensions.getExtension(id);
+    if (!ext) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: [t('remove'), t('cancel')],
+      defaultId: 1,
+      cancelId: 1,
+      message: t('confirmRemoveExtension', { name: ext.name }),
+    });
+    if (response === 0) await uninstallExtension(id, { session: ses, extensionsPath: extensionsDir() }).catch((error) => console.error(error));
+    render();
+  },
   openDownload: (id) => {
     const download = downloads.find((d) => d.id === id);
     if (download?.path) shell.openPath(download.path);
@@ -810,6 +955,12 @@ function onScreen(bounds) {
 function start() {
   Menu.setApplicationMenu(null);
   app.setAppUserModelId('com.aihub.app'); // Windows shows notifications under this id
+  // Updates come from GitHub releases: downloaded in the background, installed on quit.
+  if (app.isPackaged) {
+    const check = () => autoUpdater.checkForUpdatesAndNotify().catch((error) => console.error('Update check:', error.message));
+    check();
+    setInterval(check, 6 * 3600_000);
+  }
   services = load('services.json', DEFAULT_SERVICES);
   if (!Array.isArray(services)) services = DEFAULT_SERVICES;
   // First run: the system language if there is a translation for it, English otherwise.
@@ -825,8 +976,9 @@ function start() {
     title: 'AI Hub',
     icon: path.join(__dirname, 'icon.png'),
     backgroundColor: '#1e1e1e',
-    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false },
   });
+  handleExtensionIcons();
   if (settings.maximized) win.maximize();
   ui = win.webContents;
   ui.on('before-input-event', onKey);
