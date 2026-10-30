@@ -1,7 +1,7 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
   "main": "main.js",
@@ -16,7 +16,7 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.aihub.app",
+    "appId": "com.donetshlib.aihub",
     "productName": "AI Hub",
     "files": [
       "main.js",
