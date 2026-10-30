@@ -50,7 +50,8 @@
       {
         "provider": "github",
         "owner": "donetshlib",
-        "repo": "aihub"
+        "repo": "aihub",
+        "releaseType": "release"
       }
     ]
   },
