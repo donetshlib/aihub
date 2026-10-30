@@ -289,6 +289,7 @@ function renderSettings() {
 }
 
 function renderExtensions() {
+  $('adblock').checked = state.settings.adblock;
   if (!state.extensions.length) {
     $('ext-list').replaceChildren(el('p', { className: 'hint', textContent: t('noExtensions') }));
     return;
@@ -427,6 +428,7 @@ $('dl-clear').onclick = () => send('clearDownloads');
 $('dl-dir-path').onclick = () => send('openDownloadDir');
 $('dl-dir-change').onclick = () => send('chooseDownloadDir');
 $('dl-ask').onchange = (e) => send('setting', { key: 'askDownload', value: e.target.checked });
+$('adblock').onchange = (e) => send('setting', { key: 'adblock', value: e.target.checked });
 $('notify').onchange = (e) => send('setting', { key: 'notify', value: e.target.checked });
 
 $('theme-seg').onclick = (e) => {

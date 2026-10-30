@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store');
 const { autoUpdater } = require('electron-updater');
+const { ElectronBlocker } = require('@ghostery/adblocker-electron');
 const { LANGS, translate } = require('./ui/i18n.js');
 
 // Must match the sizes in ui/style.css.
@@ -32,7 +33,7 @@ const DEFAULT_SERVICES = PRESETS.filter((p) => p.name !== 'Perplexity').map((p) 
   id: p.name.toLowerCase(), name: p.name, url: p.url, neverUnload: false,
 }));
 const DEFAULT_SETTINGS = {
-  theme: 'dark', unloadMinutes: 15, lang: null, bounds: null, maximized: false, notify: true, downloadDir: null, askDownload: false,
+  theme: 'dark', unloadMinutes: 15, lang: null, bounds: null, maximized: false, notify: true, downloadDir: null, askDownload: false, adblock: true,
 };
 const THEMES = { dark: 'dark', light: 'light', original: 'dark' }; // app theme -> what sites see
 // Granted without asking: pages need them for plain things like a "copy" button or fullscreen video.
@@ -58,6 +59,7 @@ const inflight = new Map(); // webContents id -> Map of request id -> start time
 const wiredSessions = new Set();
 const chromeExtensions = new Map(); // session -> ElectronChromeExtensions
 const extensionIcons = new Map(); // extension path -> NativeImage
+let blocker = null; // ad blocker, loaded once at startup
 let selectedContents = null; // the tab the extensions were last told is active
 
 /* ---------- Files ---------- */
@@ -330,7 +332,7 @@ function render() {
     downloads,
     settings: {
       theme: settings.theme, unloadMinutes: settings.unloadMinutes, lang: settings.lang,
-      notify: settings.notify, downloadDir: downloadDir(), askDownload: settings.askDownload,
+      notify: settings.notify, downloadDir: downloadDir(), askDownload: settings.askDownload, adblock: settings.adblock,
     },
   });
 }
@@ -395,6 +397,7 @@ function wireSession(ses) {
   wiredSessions.add(ses);
   setSiteLanguage(ses);
   wireExtensions(ses);
+  if (settings.adblock) blocker?.enableBlockingInSession(ses);
 
   // Without setSavePath Electron shows the regular "Save as" dialog.
   ses.on('will-download', (_, item) => {
@@ -689,10 +692,21 @@ function onKey(event, input) {
   else if (ctrl && (code === 'Minus' || code === 'NumpadSubtract')) zoom(wc, -0.5);
   else if (ctrl && (code === 'Digit0' || code === 'Numpad0')) zoom(wc, 0);
   else if (code === 'F12') wc?.toggleDevTools();
+  else if (input.alt && code === 'KeyP') togglePip(wc);
   else if (ctrl && /^Digit[1-9]$/.test(code) && services[code.slice(5) - 1]) selectService(services[code.slice(5) - 1].id);
   else return;
   event.preventDefault();
 }
+
+// Runs as a user gesture: extension buttons cannot give one, so the PiP extension works only once.
+// ponytail: every frame toggles its own biggest video, two frames with videos would fight.
+const PIP = `(() => {
+  if (document.pictureInPictureElement) return document.exitPictureInPicture();
+  const video = [...document.querySelectorAll('video')].filter((v) => v.readyState && !v.disablePictureInPicture)
+    .sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+  return video?.requestPictureInPicture();
+})()`;
+const togglePip = (wc) => wc?.mainFrame.framesInSubtree.forEach((frame) => frame.executeJavaScript(PIP, true).catch(() => {}));
 
 const popup = (template) => Menu.buildFromTemplate(template).popup({ window: win });
 const separator = { type: 'separator' };
@@ -711,6 +725,7 @@ function pageMenu(tab, p) {
       separator,
     );
   }
+  if (p.mediaType === 'video') items.push({ label: t('pip'), accelerator: 'Alt+P', click: () => togglePip(wc) }, separator);
   if (p.mediaType === 'image') {
     items.push(
       { label: t('saveImage'), click: () => wc.downloadURL(p.srcURL) },
@@ -834,6 +849,10 @@ const actions = {
       nativeTheme.themeSource = THEMES[value];
     } else if (key === 'unloadMinutes' && Number(value) >= 0) settings.unloadMinutes = Number(value);
     else if ((key === 'notify' || key === 'askDownload') && typeof value === 'boolean') settings[key] = value;
+    else if (key === 'adblock' && typeof value === 'boolean') {
+      settings.adblock = value;
+      if (blocker) wiredSessions.forEach((ses) => (value ? blocker.enableBlockingInSession(ses) : blocker.disableBlockingInSession(ses)));
+    }
     else if (key === 'lang' && LANGS[value]) {
       settings.lang = value;
       wiredSessions.forEach(setSiteLanguage);
@@ -961,6 +980,13 @@ function start() {
     check();
     setInterval(check, 6 * 3600_000);
   }
+  // Ghostery's ad and tracker lists, cached; sessions wired before it loads get it here.
+  const cache = path.join(app.getPath('userData'), 'adblock.bin');
+  ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile })
+    .then((loaded) => {
+      blocker = loaded;
+      if (settings.adblock) wiredSessions.forEach((ses) => blocker.enableBlockingInSession(ses));
+    }, (error) => console.error('Ad blocker:', error.message));
   services = load('services.json', DEFAULT_SERVICES);
   if (!Array.isArray(services)) services = DEFAULT_SERVICES;
   // First run: the system language if there is a translation for it, English otherwise.
