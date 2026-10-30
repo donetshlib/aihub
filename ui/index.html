@@ -26,7 +26,8 @@
         <button id="back" data-i18n-title="back" data-hotkey="Alt+←">←</button>
         <button id="forward" data-i18n-title="forward" data-hotkey="Alt+→">→</button>
         <button id="reload">⟳</button>
-        <form id="address-form"><input id="address" spellcheck="false" data-i18n-placeholder="addressPlaceholder" /></form>
+        <form id="address-form"><input id="address" spellcheck="false" autocomplete="off" data-i18n-placeholder="addressPlaceholder" /></form>
+        <button id="star" data-i18n-title="addBookmark" data-hotkey="Ctrl+D">☆</button>
         <div id="find" hidden>
           <input id="find-input" spellcheck="false" data-i18n-placeholder="findPlaceholder" />
           <span id="find-count"></span>
@@ -36,6 +37,8 @@
         </div>
         <browser-action-list id="actions"></browser-action-list>
         <button id="extensions-btn" data-i18n-title="extensions">🧩</button>
+        <button id="bookmarks-btn" data-i18n-title="bookmarks">📑</button>
+        <button id="history-btn" data-i18n-title="history" data-hotkey="Ctrl+H">🕘</button>
         <button id="downloads-btn" data-i18n-title="downloads">⬇<span id="dl-badge" hidden></span></button>
       </div>
     </header>
@@ -111,6 +114,16 @@
           <div id="ext-list"></div>
           <button type="button" id="open-web-store" class="ghost-wide" data-i18n="openWebStore"></button>
           <p class="hint" data-i18n="extensionsHint"></p>
+        </section>
+
+        <section id="view-history" hidden>
+          <input id="history-search" class="wide" spellcheck="false" data-i18n-placeholder="searchHistory" />
+          <div id="history-list" class="link-list"></div>
+          <button type="button" id="history-clear" class="ghost-wide" data-i18n="clearHistory"></button>
+        </section>
+
+        <section id="view-bookmarks" hidden>
+          <div id="bookmark-list" class="link-list"></div>
         </section>
 
         <section id="view-downloads" hidden>

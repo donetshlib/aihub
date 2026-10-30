@@ -3,7 +3,7 @@
 const $ = (id) => document.getElementById(id);
 const { send, on } = window.hub;
 let state = null;
-let view = null; // 'add' | 'settings' | 'downloads' | null
+let view = null; // a key of TITLES, or null
 let lang = null;
 const rendered = {};
 
@@ -121,7 +121,8 @@ function renderServices(force) {
 function renderTabs(force) {
   if (sorting || (!changed('tabs', state.tabs) && !force)) return;
   $('tabs').replaceChildren(...state.tabs.map((tab) => el('div', {
-    className: 'tab' + (tab.active ? ' active' : '') + (tab.sleeping ? ' sleeping' : '') + (tab.unread ? ' unread' : ''),
+    className: 'tab' + (tab.active ? ' active' : '') + (tab.sleeping ? ' sleeping' : '') + (tab.unread ? ' unread' : '')
+      + (tab.pinned ? ' pinned' : ''),
     title: tab.title,
     onclick: () => send('selectTab', tab.id),
     onmousedown: (e) => e.button === 1 && e.preventDefault(), // no autoscroll on middle click
@@ -129,8 +130,8 @@ function renderTabs(force) {
     oncontextmenu: () => send('tabMenu', tab.id),
   },
   tab.loading ? el('span', { className: 'spinner' }) : icon(tab.favicon, tab.title, 'tab-favicon'),
-  el('span', { className: 'tab-title', textContent: tab.title }),
-  el('button', {
+  tab.pinned ? '' : el('span', { className: 'tab-title', textContent: tab.title }),
+  tab.pinned ? '' : el('button', {
     className: 'tab-close',
     textContent: '✕',
     title: withHotkey(t('close'), 'Ctrl+W'),
@@ -163,6 +164,10 @@ function renderNav() {
   $('reload').textContent = nav?.loading ? '✕' : '⟳';
   $('reload').title = nav?.loading ? t('stop') : withHotkey(t('reload'), 'F5');
   $('address').disabled = !nav;
+  $('star').disabled = !nav?.canBookmark;
+  $('star').textContent = nav?.bookmarked ? '★' : '☆';
+  $('star').classList.toggle('on', !!nav?.bookmarked);
+  $('star').title = withHotkey(t(nav?.bookmarked ? 'removeBookmark' : 'addBookmark'), 'Ctrl+D');
   if (document.activeElement !== $('address')) $('address').value = nav?.url ?? '';
   const active = state.downloads.filter((d) => d.state === 'progressing');
   $('dl-badge').hidden = !active.length;
@@ -230,12 +235,14 @@ function dragDivider(event, i) {
 
 /* ---------- Side panel ---------- */
 
-const TITLES = { add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions' };
+const TITLES = {
+  add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions', history: 'history', bookmarks: 'bookmarks',
+};
 
 function setView(next) {
   view = next;
   document.body.classList.toggle('panel-open', !!view);
-  send('panel', !!view);
+  send('panel', view);
   rendered.view = null;
   renderPanel();
 }
@@ -244,13 +251,47 @@ const toggleView = (next) => setView(view === next ? null : next);
 
 function renderPanel() {
   $('panel').hidden = !view;
-  if (!view || !changed('view', [view, state.services, state.presets, state.settings, state.downloads, state.extensions])) return;
+  const data = [view, state.services, state.presets, state.settings, state.downloads, state.extensions, state.history, state.bookmarks];
+  if (!view || !changed('view', data)) return;
   $('panel-title').textContent = t(TITLES[view]);
   for (const kind of Object.keys(TITLES)) $(`view-${kind}`).hidden = kind !== view;
   if (view === 'add') renderPresets();
   if (view === 'settings') renderSettings();
   if (view === 'downloads') renderDownloads();
   if (view === 'extensions') renderExtensions();
+  if (view === 'history') renderLinks($('history-list'), state.history, 'removeHistory', t('noHistory'), true);
+  if (view === 'bookmarks') renderLinks($('bookmark-list'), state.bookmarks, 'removeBookmark', t('noBookmarks'));
+}
+
+// "14:05" for today, "3 окт., 14:05" before.
+function when(at) {
+  const date = new Date(at);
+  const today = date.toDateString() === new Date().toDateString();
+  const parts = today ? { hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+  return date.toLocaleString(lang, parts);
+}
+
+// History and bookmarks: a click opens the page in the current tab, ✕ removes it.
+function renderLinks(box, list, removeAction, empty, withTime) {
+  if (!list.length) return box.replaceChildren(el('p', { className: 'hint', textContent: empty }));
+  box.replaceChildren(...list.map((item) => el('div', {
+    className: 'service-row link-row',
+    title: item.url,
+    onclick: () => send('openUrl', item.url),
+  },
+  icon(item.favicon, item.title || item.url, 'row-icon'),
+  el('span', { className: 'row-name', textContent: item.title || item.url }),
+  withTime ? el('span', { className: 'row-time', textContent: when(item.at) }) : '',
+  el('button', {
+    type: 'button',
+    className: 'del',
+    textContent: '✕',
+    title: t('remove'),
+    onclick: (e) => {
+      e.stopPropagation();
+      send(removeAction, item.url);
+    },
+  }))));
 }
 
 function renderPresets() {
@@ -394,6 +435,7 @@ on('state', (next) => {
 
 on('cmd', (cmd) => {
   if (cmd === 'find') openFind();
+  if (cmd === 'history') toggleView('history');
   if (cmd === 'address') {
     $('address').focus();
     $('address').select();
@@ -412,6 +454,11 @@ $('add-btn').onclick = () => toggleView('add');
 $('settings-btn').onclick = () => toggleView('settings');
 $('downloads-btn').onclick = () => toggleView('downloads');
 $('extensions-btn').onclick = () => toggleView('extensions');
+$('bookmarks-btn').onclick = () => toggleView('bookmarks');
+$('history-btn').onclick = () => toggleView('history');
+$('star').onclick = () => send('toggleBookmark');
+$('history-search').oninput = (e) => send('historySearch', e.target.value);
+$('history-clear').onclick = () => send('clearHistory');
 $('open-web-store').onclick = () => {
   send('openWebStore');
   setView(null);
@@ -447,14 +494,43 @@ $('add-form').onsubmit = (e) => {
   setView(null);
 };
 
+/* ---------- Address bar and its suggestions ---------- */
+
+// main.js draws the list in a view of its own (the tab views would cover anything drawn here)
+// and says how many rows there are; the arrow keys pick one, -1 is the typed text itself.
+let suggestionCount = 0;
+let selected = -1;
+
+function suggest(text) {
+  const r = $('address').getBoundingClientRect();
+  selected = -1;
+  send('suggest', text ? { text, rect: { x: r.left, y: r.bottom + 4, width: r.width } } : null);
+}
+
+on('suggestions', (count) => {
+  suggestionCount = count;
+});
+
 $('address-form').onsubmit = (e) => {
   e.preventDefault();
-  send('navigate', $('address').value);
+  if (selected >= 0) send('pickSuggestion', selected);
+  else send('navigate', $('address').value);
+  suggest(null);
   $('address').blur();
 };
 $('address').addEventListener('focus', () => requestAnimationFrame(() => $('address').select()));
+$('address').addEventListener('input', () => suggest($('address').value));
+// Later than a click on a suggestion, which takes the focus away first.
+$('address').addEventListener('blur', () => setTimeout(() => suggest(null), 200));
 $('address').addEventListener('keydown', (e) => {
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && suggestionCount) {
+    e.preventDefault();
+    const rows = suggestionCount + 1;
+    selected = ((selected + 1 + (e.key === 'ArrowDown' ? 1 : -1) + rows) % rows) - 1;
+    send('suggestSelect', selected);
+  }
   if (e.key !== 'Escape') return;
+  suggest(null);
   $('address').value = state?.nav?.url ?? '';
   $('address').blur();
 });

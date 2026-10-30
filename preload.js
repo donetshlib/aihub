@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('hub', {
   on: (channel, callback) => ipcRenderer.on(channel, (_, ...args) => callback(...args)),
 });
 
-// The <browser-action-list> element: toolbar buttons of Chrome extensions.
-injectBrowserAction();
+// The <browser-action-list> element: toolbar buttons of Chrome extensions. Main window only,
+// the suggestions page shares this preload.
+if (location.pathname.endsWith('/index.html')) injectBrowserAction();

@@ -52,6 +52,14 @@ let panes = []; // tab ids shown side by side
 let fractions = [];
 let focused = 0;
 let panelOpen = false;
+let panelView = null; // which side panel view is open: the history and bookmark lists are sent only for it
+let history = []; // visited pages, newest first, one entry per URL
+let historyDirty = false;
+let historyQuery = '';
+let bookmarks = [];
+let suggestView = null; // address bar suggestions, a view of its own to sit above the tab views
+let suggestions = [];
+let selectedSuggestion = -1;
 const downloads = [];
 const downloadItems = new Map();
 let nextDownloadId = 1;
@@ -87,7 +95,7 @@ function save(name, data) {
 function saveSession() {
   const list = [...tabs.values()];
   save('session.json', {
-    tabs: list.map(({ serviceId, url, title, favicon }) => ({ serviceId, url, title, favicon })),
+    tabs: list.map(({ serviceId, url, title, favicon, pinned }) => ({ serviceId, url, title, favicon, pinned })),
     active: list.indexOf(current()),
   });
 }
@@ -130,7 +138,10 @@ function ensureView(tab) {
 
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
-    if (!isErrorPage(wc)) tab.url = wc.getURL() || tab.url;
+    if (!isErrorPage(wc)) {
+      tab.url = wc.getURL() || tab.url;
+      remember(tab);
+    }
     render();
   };
   wc.on('did-navigate', onNavigate);
@@ -141,8 +152,16 @@ function ensureView(tab) {
     tab.url = url || tab.url;
     wc.loadFile(ERROR_PAGE, { query: { url: tab.url, code: description || String(code), lang: settings.lang } });
   });
-  wc.on('page-title-updated', (_, title) => { tab.title = title; render(); });
-  wc.on('page-favicon-updated', (_, icons) => { tab.favicon = icons[0] ?? null; render(); });
+  wc.on('page-title-updated', (_, title) => {
+    tab.title = title;
+    updateHistory(tab, { title });
+    render();
+  });
+  wc.on('page-favicon-updated', (_, icons) => {
+    tab.favicon = icons[0] ?? null;
+    updateHistory(tab, { favicon: tab.favicon });
+    render();
+  });
   wc.on('did-start-loading', () => { tab.loading = true; render(); });
   wc.on('did-stop-loading', () => { tab.loading = false; render(); });
   wc.on('focus', () => {
@@ -244,6 +263,115 @@ function cycleTab(step) {
   showTab(list[(list.indexOf(tab) + step + list.length) % list.length]);
 }
 
+function togglePin(tab) {
+  tab.pinned = !tab.pinned;
+  // Pinned tabs go first, the rest keep their order.
+  const list = serviceTabs(tab.serviceId);
+  reorder(tab.serviceId, [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]);
+  render();
+}
+
+// Tabs keep their order as the insertion order of the map, so the map is rebuilt.
+function reorder(serviceId, list) {
+  const rest = [...tabs.values()].filter((other) => other.serviceId !== serviceId);
+  tabs.clear();
+  for (const other of [...rest, ...list]) tabs.set(other.id, other);
+}
+
+/* ---------- History and bookmarks ---------- */
+
+const HISTORY_MAX = 5000;
+const isWeb = (url) => /^https?:/i.test(url);
+
+function remember(tab) {
+  if (!isWeb(tab.url)) return;
+  history = history.filter((h) => h.url !== tab.url);
+  history.unshift({ url: tab.url, title: tab.title, favicon: tab.favicon, at: Date.now() });
+  history.length = Math.min(history.length, HISTORY_MAX);
+  historyDirty = true;
+}
+
+function updateHistory(tab, fields) {
+  const entry = history.find((h) => h.url === tab.url);
+  if (entry) Object.assign(entry, fields);
+  historyDirty = true;
+}
+
+// Every word of the query somewhere in the title or the address.
+function matches(query) {
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+  return (item) => words.every((w) => `${item.title} ${item.url}`.toLowerCase().includes(w));
+}
+
+function toggleBookmark(tab = current()) {
+  if (!tab || !isWeb(tab.url)) return;
+  const i = bookmarks.findIndex((b) => b.url === tab.url);
+  if (i >= 0) bookmarks.splice(i, 1);
+  else bookmarks.unshift({ url: tab.url, title: tab.title || tab.url, favicon: tab.favicon });
+  save('bookmarks.json', bookmarks);
+  render();
+}
+
+function openUrl(url) {
+  const wc = currentContents();
+  if (!wc || !isWeb(url)) return;
+  wc.loadURL(url);
+  wc.focus();
+}
+
+/* ---------- Address bar suggestions ---------- */
+
+// Open tabs of every service first (that is also the tab search), then bookmarks, then history.
+function suggest(arg) {
+  const text = typeof arg?.text === 'string' ? arg.text.trim() : '';
+  const rect = arg?.rect;
+  selectedSuggestion = -1;
+  suggestions = [];
+  if (text && rect) {
+    const match = matches(text);
+    const seen = new Set();
+    const take = (list, type, n) => {
+      for (const item of list) {
+        if (n <= 0) break;
+        if (seen.has(item.url) || !match(item)) continue;
+        seen.add(item.url);
+        suggestions.push({
+          type, url: item.url, title: item.title || item.url, favicon: item.favicon,
+          tabId: item.id, service: serviceById(item.serviceId)?.name,
+        });
+        n--;
+      }
+    };
+    take([...tabs.values()].filter((tab) => tab !== current()), 'tab', 3);
+    take(bookmarks, 'bookmark', 3);
+    take(history, 'history', 8 - suggestions.length);
+  }
+  ui.send('suggestions', suggestions.length);
+  if (!suggestions.length) return suggestView?.setVisible(false);
+  if (!suggestView) {
+    suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false } });
+    suggestView.setBackgroundColor('#00000000');
+    suggestView.webContents.loadFile(path.join(__dirname, 'ui', 'suggest.html'));
+    suggestView.webContents.on('did-finish-load', sendSuggestions);
+  }
+  win.contentView.addChildView(suggestView); // again: brings it above tab views made since
+  suggestView.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: suggestions.length * 44 + 14 });
+  suggestView.setVisible(true);
+  sendSuggestions();
+}
+
+function sendSuggestions() {
+  suggestView.webContents.send('suggestions', { list: suggestions, selected: selectedSuggestion, theme: settings.theme, lang: settings.lang });
+}
+
+function pickSuggestion(i) {
+  const item = suggestions[i];
+  suggestView?.setVisible(false);
+  if (!item) return;
+  if (item.type === 'tab' && tabs.has(item.tabId)) showTab(tabs.get(item.tabId));
+  else openUrl(item.url);
+}
+
 /* ---------- Split view ---------- */
 
 function openBeside(tab) {
@@ -320,6 +448,7 @@ function render() {
     tabs: tab
       ? serviceTabs(tab.serviceId).map((t) => ({
           id: t.id, title: t.title || t.url, favicon: t.favicon, loading: t.loading, sleeping: !t.view, unread: !!t.unread, active: t.id === tab.id,
+          pinned: !!t.pinned,
         }))
       : [],
     panes: rects.map((r, i) => ({ id: panes[i], title: tabs.get(panes[i]).title, x: r.x, width: r.width, focused: i === focused })),
@@ -327,9 +456,12 @@ function render() {
       ? {
           url: tab.url, loading: tab.loading, canBack: !!wc?.navigationHistory.canGoBack(), canForward: !!wc?.navigationHistory.canGoForward(),
           partition: `persist:${tab.serviceId}`, contentsId: wc?.id ?? null,
+          bookmarked: bookmarks.some((b) => b.url === tab.url), canBookmark: isWeb(tab.url),
         }
       : null,
     extensions: listExtensions(wc?.session),
+    history: panelView === 'history' ? history.filter(matches(historyQuery)).slice(0, 300) : [],
+    bookmarks: panelView === 'bookmarks' ? bookmarks : [],
     downloads,
     settings: {
       theme: settings.theme, unloadMinutes: settings.unloadMinutes, lang: settings.lang,
@@ -537,12 +669,18 @@ function freePath(dir, name) {
   return file;
 }
 
+function saveHistory() {
+  if (!historyDirty) return;
+  historyDirty = false;
+  save('history.json', history);
+}
+
 function unloadIdleTabs() {
   const limit = settings.unloadMinutes * 60_000;
   let slept = false;
   if (limit > 0) {
     for (const tab of tabs.values()) {
-      if (!tab.view || tab.shown || serviceById(tab.serviceId)?.neverUnload) continue;
+      if (!tab.view || tab.shown || tab.pinned || serviceById(tab.serviceId)?.neverUnload) continue;
       const wc = tab.view.webContents;
       // ponytail: a site holding a long-poll request open never unloads; filter such URLs if that shows up.
       if (Date.now() - tab.hiddenAt < limit || inflight.get(wc.id)?.size || wc.isCurrentlyAudible()) continue;
@@ -552,6 +690,7 @@ function unloadIdleTabs() {
   }
   if (slept) render();
   saveSession();
+  saveHistory();
 }
 
 /* ---------- Ad blocker ---------- */
@@ -710,6 +849,10 @@ function onKey(event, input) {
   else if (ctrl && (code === 'Digit0' || code === 'Numpad0')) zoom(wc, 0);
   else if (code === 'F12') wc?.toggleDevTools();
   else if (input.alt && code === 'KeyP') togglePip(wc);
+  else if (ctrl && code === 'KeyP') wc?.print();
+  else if (ctrl && code === 'KeyS') savePage(wc);
+  else if (ctrl && code === 'KeyD') toggleBookmark();
+  else if (ctrl && code === 'KeyH') ui.send('cmd', 'history');
   else if (ctrl && /^Digit[1-9]$/.test(code) && services[code.slice(5) - 1]) selectService(services[code.slice(5) - 1].id);
   else return;
   event.preventDefault();
@@ -724,6 +867,20 @@ const PIP = `(() => {
   return video?.requestPictureInPicture();
 })()`;
 const togglePip = (wc) => wc?.mainFrame.framesInSubtree.forEach((frame) => frame.executeJavaScript(PIP, true).catch(() => {}));
+
+// Google Translate's proxy shows the page translated, links keep working inside it.
+const translatePageUrl = (url) => `https://translate.google.com/translate?sl=auto&tl=${settings.lang}&u=${encodeURIComponent(url)}`;
+const translateTextUrl = (text) => `https://translate.google.com/?sl=auto&tl=${settings.lang}&op=translate&text=${encodeURIComponent(text)}`;
+
+async function savePage(wc) {
+  if (!wc) return;
+  const name = wc.getTitle().replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 100) || 'page';
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    defaultPath: path.join(downloadDir(), `${name}.html`),
+    filters: [{ name: 'HTML', extensions: ['html'] }],
+  });
+  if (!canceled && filePath) wc.savePage(filePath, 'HTMLComplete').catch((error) => console.error('Save page:', error.message));
+}
 
 const popup = (template) => Menu.buildFromTemplate(template).popup({ window: win });
 const separator = { type: 'separator' };
@@ -759,10 +916,21 @@ function pageMenu(tab, p) {
       separator,
     );
   } else if (p.selectionText) items.push({ role: 'copy', label: t('copy') }, separator);
+  if (p.selectionText.trim()) {
+    const text = p.selectionText.trim();
+    items.push({
+      label: t('translateText', { text: text.length > 24 ? `${text.slice(0, 24)}…` : text }),
+      click: () => showTab(makeTab(tab.serviceId, translateTextUrl(text))),
+    }, separator);
+  }
   items.push(
     { label: t('back'), enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
     { label: t('forward'), enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
     { label: t('reload'), click: () => reload(tab) },
+    separator,
+    { label: t('translatePage'), enabled: isWeb(tab.url), click: () => wc.loadURL(translatePageUrl(tab.url)) },
+    { label: t('print'), accelerator: 'Ctrl+P', click: () => wc.print() },
+    { label: t('savePage'), accelerator: 'Ctrl+S', click: () => savePage(wc) },
     separator,
     ...(fromExtensions.length ? [...fromExtensions, separator] : []),
     { label: t('inspect'), click: () => wc.inspectElement(p.x, p.y) },
@@ -781,6 +949,7 @@ function tabMenu(id) {
   popup([
     { label: t('openBeside'), enabled: !panes.includes(id) && panes.length < MAX_PANES, click: () => openBeside(tab) },
     { label: t('reload'), click: () => reload(tab) },
+    { label: t(tab.pinned ? 'unpinTab' : 'pinTab'), click: () => togglePin(tab) },
     { label: t('duplicate'), click: () => showTab(makeTab(tab.serviceId, tab.url, tab.title, tab.favicon)) },
     { label: t('openInBrowser'), click: () => openExternal(tab.url) },
     { label: t('copyAddress'), click: () => clipboard.writeText(tab.url) },
@@ -788,7 +957,7 @@ function tabMenu(id) {
     { label: t('unloadTab'), enabled: !!tab.view && !tab.shown, click: () => unload([tab]) },
     separator,
     { label: t('close'), click: () => closeTab(id) },
-    { label: t('closeOthers'), click: () => serviceTabs(tab.serviceId).filter((other) => other !== tab).forEach((other) => closeTab(other.id)) },
+    { label: t('closeOthers'), click: () => serviceTabs(tab.serviceId).filter((other) => other !== tab && !other.pinned).forEach((other) => closeTab(other.id)) },
   ]);
 }
 
@@ -854,6 +1023,36 @@ const actions = {
   },
   panel: (open) => {
     panelOpen = !!open;
+    panelView = typeof open === 'string' ? open : null;
+    render();
+  },
+  suggest,
+  suggestSelect: (i) => {
+    selectedSuggestion = Number.isInteger(i) ? i : -1;
+    if (suggestView) sendSuggestions();
+  },
+  pickSuggestion,
+  toggleBookmark: () => toggleBookmark(),
+  removeBookmark: (url) => {
+    bookmarks = bookmarks.filter((b) => b.url !== url);
+    save('bookmarks.json', bookmarks);
+    render();
+  },
+  openUrl,
+  historySearch: (query) => {
+    historyQuery = String(query ?? '');
+    render();
+  },
+  removeHistory: (url) => {
+    history = history.filter((h) => h.url !== url);
+    historyDirty = true;
+    render();
+  },
+  clearHistory: () => {
+    if (!confirm(t('confirmClearHistory'))) return;
+    history = [];
+    historyDirty = true;
+    saveHistory();
     render();
   },
   addService,
@@ -958,16 +1157,13 @@ const actions = {
     save('services.json', services);
     render();
   },
-  // Tabs keep their order as the insertion order of the map, so the map is rebuilt.
   moveTab: ({ id, to }) => {
     const tab = tabs.get(id);
     if (!tab) return;
     const list = serviceTabs(tab.serviceId).filter((other) => other !== tab);
     if (!(to >= 0 && to <= list.length)) return;
     list.splice(to, 0, tab);
-    const rest = [...tabs.values()].filter((other) => other.serviceId !== tab.serviceId);
-    tabs.clear();
-    for (const other of [...rest, ...list]) tabs.set(other.id, other);
+    reorder(tab.serviceId, list);
     render();
   },
   clearDownloads: () => {
@@ -979,6 +1175,7 @@ const actions = {
 
 ipcMain.on('ui', (event, action, arg) => {
   if (event.sender === ui && Object.hasOwn(actions, action)) actions[action](arg);
+  else if (event.sender === suggestView?.webContents && action === 'pickSuggestion') pickSuggestion(arg);
 });
 
 /* ---------- Startup ---------- */
@@ -1022,6 +1219,10 @@ function start() {
   // First run: the system language if there is a translation for it, English otherwise.
   if (!LANGS[settings.lang]) settings.lang = app.getPreferredSystemLanguages().map((l) => l.slice(0, 2)).find((l) => LANGS[l]) ?? 'en';
   permissions = load('permissions.json', {});
+  history = load('history.json', []);
+  bookmarks = load('bookmarks.json', []);
+  if (!Array.isArray(history)) history = [];
+  if (!Array.isArray(bookmarks)) bookmarks = [];
   nativeTheme.themeSource = THEMES[settings.theme] ?? 'dark';
 
   const bounds = settings.bounds && onScreen(settings.bounds) ? settings.bounds : { width: 1280, height: 820 };
@@ -1050,12 +1251,17 @@ function start() {
     settings.maximized = win.isMaximized();
     save('settings.json', settings);
     saveSession();
+    saveHistory();
   });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
   const saved = load('session.json', { tabs: [], active: -1 });
-  const restored = (Array.isArray(saved.tabs) ? saved.tabs : []).map((t) =>
-    serviceById(t.serviceId) && typeof t.url === 'string' ? makeTab(t.serviceId, t.url, t.title, t.favicon) : null);
+  const restored = (Array.isArray(saved.tabs) ? saved.tabs : []).map((t) => {
+    if (!serviceById(t.serviceId) || typeof t.url !== 'string') return null;
+    const tab = makeTab(t.serviceId, t.url, t.title, t.favicon);
+    tab.pinned = !!t.pinned;
+    return tab;
+  });
   const active = restored[saved.active] ?? restored.find(Boolean);
   if (active) showTab(active);
   else if (services[0]) selectService(services[0].id);
