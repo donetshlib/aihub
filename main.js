@@ -1331,7 +1331,7 @@ function onScreen(bounds) {
 
 function start() {
   Menu.setApplicationMenu(null);
-  app.setAppUserModelId('com.donetshlib.aihub'); // notifications and taskbar group; must match build.appId
+  app.setAppUserModelId('com.v2.aihub'); // notifications and taskbar group; must match build.appId
   // Updates come from GitHub releases: downloaded in the background, installed on quit.
   if (app.isPackaged) {
     const check = () => autoUpdater.checkForUpdatesAndNotify().catch((error) => console.error('Update check:', error.message));

@@ -4,6 +4,7 @@
   "version": "0.7.1",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
+  "license": "MIT",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -16,7 +17,7 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.donetshlib.aihub",
+    "appId": "com.v2.aihub",
     "productName": "AI Hub",
     "files": [
       "main.js",
