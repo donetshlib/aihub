@@ -4,7 +4,7 @@
   "version": "0.7.1",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "main": "main.js",
   "private": true,
   "scripts": {
