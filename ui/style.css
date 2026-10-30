@@ -1119,3 +1119,28 @@ html.suggest-page body {
 .suggestion-tag {
   flex-shrink: 0;
 }
+
+/* Sections: smaller icons under their service, behind a fold arrow */
+.service.section {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+.service.section .service-icon {
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.section-toggle {
+  flex-shrink: 0;
+  margin: -5px 0 -3px;
+  padding: 0 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.section-toggle:hover {
+  color: var(--text);
+}

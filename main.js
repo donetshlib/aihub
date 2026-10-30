@@ -104,6 +104,11 @@ function saveSession() {
 
 const serviceById = (id) => services.find((s) => s.id === id);
 const serviceTabs = (id) => [...tabs.values()].filter((t) => t.serviceId === id);
+// A section lives in its parent's profile: same cookies, same account, its own tabs.
+const rootOf = (id) => serviceById(id)?.parent ?? id;
+const partitionOf = (id) => `persist:${rootOf(id)}`;
+const family = (id) => services.filter((s) => s.id === id || s.parent === id);
+const topServices = () => services.filter((s) => !s.parent);
 const t = (key, vars) => translate(settings.lang, key, vars);
 const current = () => tabs.get(panes[focused]);
 const currentContents = () => current()?.view?.webContents;
@@ -121,7 +126,7 @@ function makeTab(serviceId, url, title = '', icon = null) {
 // A tab without a view is "sleeping": it keeps its URL and title, the page is loaded on demand.
 function ensureView(tab) {
   if (tab.view) return tab.view;
-  const view = new WebContentsView({ webPreferences: { partition: `persist:${tab.serviceId}` } });
+  const view = new WebContentsView({ webPreferences: { partition: partitionOf(tab.serviceId) } });
   const wc = view.webContents;
   tab.view = view;
   wireSession(wc.session);
@@ -140,6 +145,7 @@ function ensureView(tab) {
     // On the error page the tab keeps the address that failed.
     if (!isErrorPage(wc)) {
       tab.url = wc.getURL() || tab.url;
+      tab.translated = false;
       remember(tab);
     }
     render();
@@ -441,6 +447,7 @@ function render() {
         count: list.reduce((sum, t) => sum + titleCount(t.title), 0),
         unread: list.some((t) => t.unread),
         sleeping: !list.some((t) => t.view),
+        label: s.parent ? (tabs.get(lastTab[s.id]) ?? list[0])?.title || s.name : s.name,
       };
     }),
     presets: PRESETS.map((p) => ({ ...p, icon: favicon(p.url) })),
@@ -455,7 +462,7 @@ function render() {
     nav: tab
       ? {
           url: tab.url, loading: tab.loading, canBack: !!wc?.navigationHistory.canGoBack(), canForward: !!wc?.navigationHistory.canGoForward(),
-          partition: `persist:${tab.serviceId}`, contentsId: wc?.id ?? null,
+          partition: partitionOf(tab.serviceId), contentsId: wc?.id ?? null,
           bookmarked: bookmarks.some((b) => b.url === tab.url), canBookmark: isWeb(tab.url),
         }
       : null,
@@ -491,14 +498,28 @@ function addService({ name, url }) {
 
 function removeService(id) {
   const service = serviceById(id);
-  if (!service || !confirm(t('confirmRemove', { name: service.name }))) return;
-  for (const tab of serviceTabs(id)) closeTab(tab.id);
-  services = services.filter((s) => s !== service);
+  if (!service || !confirm(t(service.parent ? 'confirmRemoveSection' : 'confirmRemove', { name: service.name }))) return;
+  const removed = family(id);
+  for (const tab of removed.flatMap((s) => serviceTabs(s.id))) closeTab(tab.id);
+  services = services.filter((s) => !removed.includes(s));
   save('services.json', services);
   // Ids are never reused, so nothing could ever open this storage again.
-  session.fromPartition(`persist:${id}`).clearStorageData();
+  if (!service.parent) session.fromPartition(`persist:${id}`).clearStorageData();
   if (!panes.length && services[0]) selectService(services[0].id);
   render();
+}
+
+function addSection(parentId) {
+  const parent = serviceById(parentId);
+  if (!parent || parent.parent) return;
+  const siblings = services.filter((s) => s.parent === parent.id);
+  const section = {
+    id: `${parent.id}-${Date.now().toString(36)}`, name: `${parent.name} ${siblings.length + 2}`, url: parent.url, parent: parent.id, neverUnload: false,
+  };
+  services.splice(services.indexOf(siblings.at(-1) ?? parent) + 1, 0, section);
+  parent.collapsed = false;
+  save('services.json', services);
+  selectService(section.id);
 }
 
 function toggleNeverUnload(id) {
@@ -511,8 +532,8 @@ function toggleNeverUnload(id) {
 
 async function signOut(ids, message) {
   if (!confirm(message)) return;
-  for (const id of ids) {
-    for (const tab of serviceTabs(id)) {
+  for (const id of ids.map(rootOf)) {
+    for (const tab of family(id).flatMap((s) => serviceTabs(s.id))) {
       sleep(tab);
       tab.url = serviceById(id).url;
     }
@@ -715,7 +736,7 @@ function setAdblock(ses, on) {
 // Whatever one profile loads or drops (install, update, uninstall) is mirrored to the others.
 const extensionsDir = () => path.join(app.getPath('userData'), 'Extensions');
 const tabOf = (wc) => [...tabs.values()].find((tab) => tab.view?.webContents === wc);
-const serviceOf = (ses) => services.find((s) => session.fromPartition(`persist:${s.id}`) === ses);
+const serviceOf = (ses) => topServices().find((s) => session.fromPartition(`persist:${s.id}`) === ses);
 
 function wireExtensions(ses) {
   chromeExtensions.set(ses, new ElectronChromeExtensions({
@@ -853,7 +874,7 @@ function onKey(event, input) {
   else if (ctrl && code === 'KeyS') savePage(wc);
   else if (ctrl && code === 'KeyD') toggleBookmark();
   else if (ctrl && code === 'KeyH') ui.send('cmd', 'history');
-  else if (ctrl && /^Digit[1-9]$/.test(code) && services[code.slice(5) - 1]) selectService(services[code.slice(5) - 1].id);
+  else if (ctrl && /^Digit[1-9]$/.test(code) && topServices()[code.slice(5) - 1]) selectService(topServices()[code.slice(5) - 1].id);
   else return;
   event.preventDefault();
 }
@@ -868,8 +889,60 @@ const PIP = `(() => {
 })()`;
 const togglePip = (wc) => wc?.mainFrame.framesInSubtree.forEach((frame) => frame.executeJavaScript(PIP, true).catch(() => {}));
 
-// Google Translate's proxy shows the page translated, links keep working inside it.
-const translatePageUrl = (url) => `https://translate.google.com/translate?sl=auto&tl=${settings.lang}&u=${encodeURIComponent(url)}`;
+// The page's own text is translated in place: Google's proxy page would load the site again
+// without its cookies, and sites behind a sign-in or Cloudflare break there. Runs in an isolated
+// world, which shares the DOM but not the page's scripts. Text added later stays untranslated.
+const TRANSLATE_WORLD = 1001;
+const COLLECT_TEXT = `(() => {
+  const skip = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'CODE', 'PRE']);
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.nodeValue.trim() && !skip.has(n.parentElement?.tagName) && !n.parentElement?.isContentEditable ? 1 : 2),
+  });
+  window.textNodes = [];
+  for (let n; (n = walker.nextNode()); ) window.textNodes.push(n);
+  return [...new Set(window.textNodes.map((n) => n.nodeValue.trim()))];
+})()`;
+const APPLY_TRANSLATION = (done) => `((done) => {
+  window.originals = window.originals ?? new Map();
+  for (const n of window.textNodes) {
+    const key = n.nodeValue.trim();
+    if (!done[key]) continue;
+    if (!window.originals.has(n)) window.originals.set(n, n.nodeValue);
+    n.nodeValue = n.nodeValue.replace(key, done[key]);
+  }
+})(${JSON.stringify(done)})`;
+const RESTORE_TEXT = `for (const [n, text] of window.originals ?? []) n.nodeValue = text; window.originals = new Map();`;
+
+async function translatePage(tab) {
+  const wc = tab.view?.webContents;
+  if (!wc) return;
+  const run = (code) => wc.executeJavaScriptInIsolatedWorld(TRANSLATE_WORLD, [{ code }]);
+  const texts = await run(COLLECT_TEXT);
+  // Up to 100 strings and about 5000 characters per request.
+  const batches = [];
+  for (const text of texts) {
+    const last = batches.at(-1);
+    if (last && last.length < 100 && last.reduce((n, q) => n + q.length, 0) + text.length < 5000) last.push(text);
+    else batches.push([text.slice(0, 5000)]);
+  }
+  const done = {};
+  await Promise.all(batches.map(async (batch) => {
+    const response = await fetch(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=${settings.lang}`, {
+      method: 'POST',
+      body: new URLSearchParams(batch.map((q) => ['q', q])),
+    });
+    const result = await response.json();
+    batch.forEach((q, i) => (done[q] = typeof result[i] === 'string' ? result[i] : result[i]?.[0]));
+  })).catch((error) => console.error('Translate:', error.message));
+  if (wc.isDestroyed()) return;
+  await run(APPLY_TRANSLATION(done));
+  tab.translated = true;
+}
+
+function showOriginal(tab) {
+  tab.view?.webContents.executeJavaScriptInIsolatedWorld(TRANSLATE_WORLD, [{ code: RESTORE_TEXT }]);
+  tab.translated = false;
+}
 const translateTextUrl = (text) => `https://translate.google.com/?sl=auto&tl=${settings.lang}&op=translate&text=${encodeURIComponent(text)}`;
 
 async function savePage(wc) {
@@ -928,7 +1001,9 @@ function pageMenu(tab, p) {
     { label: t('forward'), enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
     { label: t('reload'), click: () => reload(tab) },
     separator,
-    { label: t('translatePage'), enabled: isWeb(tab.url), click: () => wc.loadURL(translatePageUrl(tab.url)) },
+    tab.translated
+      ? { label: t('showOriginal'), click: () => showOriginal(tab) }
+      : { label: t('translatePage'), enabled: isWeb(tab.url), click: () => translatePage(tab) },
     { label: t('print'), accelerator: 'Ctrl+P', click: () => wc.print() },
     { label: t('savePage'), accelerator: 'Ctrl+S', click: () => savePage(wc) },
     separator,
@@ -972,11 +1047,12 @@ function serviceMenu(id) {
       enabled: panes.length < MAX_PANES,
       click: () => openBeside(serviceTabs(id).find((t) => !panes.includes(t.id)) ?? makeTab(id, service.url)),
     },
+    ...(service.parent ? [] : [{ label: t('newSection'), click: () => addSection(id) }]),
     { label: t('neverUnload'), type: 'checkbox', checked: service.neverUnload, click: () => toggleNeverUnload(id) },
     { label: t('unloadService'), enabled: awake.length > 0, click: () => unload(awake) },
     separator,
     { label: t('signOut'), click: () => signOut([id], t('confirmSignOut', { name: service.name })) },
-    { label: t('removeService'), click: () => removeService(id) },
+    { label: t(service.parent ? 'removeSection' : 'removeService'), click: () => removeService(id) },
   ]);
 }
 
@@ -1039,6 +1115,13 @@ const actions = {
     render();
   },
   openUrl,
+  openUrlInBackground: (url) => {
+    const service = current()?.serviceId ?? services[0]?.id;
+    if (service && isWeb(url)) {
+      makeTab(service, url);
+      render();
+    }
+  },
   historySearch: (query) => {
     historyQuery = String(query ?? '');
     render();
@@ -1058,7 +1141,14 @@ const actions = {
   addService,
   removeService,
   toggleNeverUnload,
-  signOutAll: () => signOut(services.map((s) => s.id), t('confirmSignOutAll')),
+  toggleSections: (id) => {
+    const service = serviceById(id);
+    if (!service) return;
+    service.collapsed = !service.collapsed;
+    save('services.json', services);
+    render();
+  },
+  signOutAll: () => signOut(topServices().map((s) => s.id), t('confirmSignOutAll')),
   setting: ({ key, value }) => {
     if (key === 'theme' && THEMES[value]) {
       settings.theme = value;
@@ -1150,10 +1240,12 @@ const actions = {
     save('permissions.json', permissions);
   },
   moveService: ({ id, to }) => {
+    const tops = topServices();
     const service = serviceById(id);
-    if (!service || !(to >= 0 && to < services.length)) return;
-    services.splice(services.indexOf(service), 1);
-    services.splice(to, 0, service);
+    if (!service || service.parent || !(to >= 0 && to < tops.length)) return;
+    tops.splice(tops.indexOf(service), 1);
+    tops.splice(to, 0, service);
+    services = tops.flatMap((top) => family(top.id));
     save('services.json', services);
     render();
   },

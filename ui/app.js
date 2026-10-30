@@ -103,19 +103,38 @@ const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} ${t('mb')}`;
 
 /* ---------- Sidebar, tabs, toolbar ---------- */
 
-function renderServices(force) {
-  if (sorting || (!changed('services', [state.services, state.activeService]) && !force)) return;
-  $('services').replaceChildren(...state.services.map((s, i) => el('button', {
+function serviceButton(s, hotkey) {
+  return el('button', {
     className: 'service' + (s.id === state.activeService ? ' active' : '') + (s.neverUnload ? ' pinned' : '')
-      + (s.sleeping ? ' sleeping' : ''),
-    title: withHotkey(s.sleeping ? `${s.name} (${t('sleepingHint')})` : s.name, i < 9 ? `Ctrl+${i + 1}` : ''),
+      + (s.sleeping ? ' sleeping' : '') + (s.parent ? ' section' : ''),
+    title: withHotkey(s.sleeping ? `${s.label} (${t('sleepingHint')})` : s.label, hotkey),
     onclick: () => send('selectService', s.id),
     oncontextmenu: () => send('serviceMenu', s.id),
   },
   icon(s.icon, s.name, 'service-icon'),
   // The site's own count from its title, or a dot for a reply that has not been looked at.
-  s.count || s.unread ? el('span', { className: 'badge' + (s.count ? '' : ' dot'), textContent: s.count > 99 ? '99+' : s.count || '' }) : '')));
-  sortable([...$('services').children], 'y', (from, to) => send('moveService', { id: state.services[from].id, to }));
+  s.count || s.unread ? el('span', { className: 'badge' + (s.count ? '' : ' dot'), textContent: s.count > 99 ? '99+' : s.count || '' }) : '');
+}
+
+// Top level services, each followed by an arrow and its sections (folded sections still show
+// the one on screen). Only the top level is sorted by dragging, sections move with their parent.
+function renderServices(force) {
+  if (sorting || (!changed('services', [state.services, state.activeService]) && !force)) return;
+  const tops = state.services.filter((s) => !s.parent);
+  const topButtons = tops.map((s, i) => serviceButton(s, i < 9 ? `Ctrl+${i + 1}` : ''));
+  $('services').replaceChildren(...tops.flatMap((top, i) => {
+    const sections = state.services.filter((s) => s.parent === top.id);
+    if (!sections.length) return [topButtons[i]];
+    const toggle = el('button', {
+      className: 'section-toggle',
+      textContent: `${top.collapsed ? '▸' : '▾'} ${sections.length}`,
+      title: t(top.collapsed ? 'showSections' : 'hideSections'),
+      onclick: () => send('toggleSections', top.id),
+    });
+    const shown = sections.filter((s) => !top.collapsed || s.id === state.activeService);
+    return [topButtons[i], toggle, ...shown.map((s) => serviceButton(s, ''))];
+  }));
+  sortable(topButtons, 'y', (from, to) => send('moveService', { id: tops[from].id, to }));
 }
 
 function renderTabs(force) {
@@ -277,7 +296,9 @@ function renderLinks(box, list, removeAction, empty, withTime) {
   box.replaceChildren(...list.map((item) => el('div', {
     className: 'service-row link-row',
     title: item.url,
-    onclick: () => send('openUrl', item.url),
+    onclick: (e) => send(e.ctrlKey ? 'openUrlInBackground' : 'openUrl', item.url),
+    onmousedown: (e) => e.button === 1 && e.preventDefault(), // no autoscroll on middle click
+    onauxclick: (e) => e.button === 1 && send('openUrlInBackground', item.url),
   },
   icon(item.favicon, item.title || item.url, 'row-icon'),
   el('span', { className: 'row-name', textContent: item.title || item.url }),
@@ -314,7 +335,7 @@ function renderSettings() {
   markSegment($('theme-seg'), state.settings.theme);
   markSegment($('unload-seg'), state.settings.unloadMinutes);
   $('notify').checked = state.settings.notify;
-  $('service-rows').replaceChildren(...state.services.map((s) => el('div', {
+  $('service-rows').replaceChildren(...state.services.filter((s) => !s.parent).map((s) => el('div', {
     className: 'service-row' + (s.id === state.activeService ? ' current' : ''),
   },
   icon(s.icon, s.name, 'row-icon'),
