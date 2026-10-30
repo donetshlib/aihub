@@ -1,7 +1,7 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
   "main": "main.js",

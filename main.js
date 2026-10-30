@@ -60,6 +60,7 @@ const wiredSessions = new Set();
 const chromeExtensions = new Map(); // session -> ElectronChromeExtensions
 const extensionIcons = new Map(); // extension path -> NativeImage
 let blocker = null; // ad blocker, loaded once at startup
+const adblockPreloads = new Map(); // session -> id of the blocker's preload
 let selectedContents = null; // the tab the extensions were last told is active
 
 /* ---------- Files ---------- */
@@ -397,7 +398,7 @@ function wireSession(ses) {
   wiredSessions.add(ses);
   setSiteLanguage(ses);
   wireExtensions(ses);
-  if (settings.adblock) blocker?.enableBlockingInSession(ses);
+  if (settings.adblock) setAdblock(ses, true);
 
   // Without setSavePath Electron shows the regular "Save as" dialog.
   ses.on('will-download', (_, item) => {
@@ -551,6 +552,22 @@ function unloadIdleTabs() {
   }
   if (slept) render();
   saveSession();
+}
+
+/* ---------- Ad blocker ---------- */
+
+// What blocker.enableBlockingInSession does, minus its ipcMain.handle calls: those are global and
+// throw on the second session, so they are registered once when the blocker loads.
+function setAdblock(ses, on) {
+  if (!blocker || on === adblockPreloads.has(ses)) return;
+  if (on) {
+    adblockPreloads.set(ses, ses.registerPreloadScript({ type: 'frame', filePath: require.resolve('@ghostery/adblocker-electron-preload') }));
+  } else {
+    ses.unregisterPreloadScript(adblockPreloads.get(ses));
+    adblockPreloads.delete(ses);
+  }
+  ses.webRequest.onBeforeRequest(on ? blocker.onBeforeRequest : null);
+  ses.webRequest.onHeadersReceived(on ? blocker.onHeadersReceived : null);
 }
 
 /* ---------- Chrome extensions ---------- */
@@ -851,7 +868,7 @@ const actions = {
     else if ((key === 'notify' || key === 'askDownload') && typeof value === 'boolean') settings[key] = value;
     else if (key === 'adblock' && typeof value === 'boolean') {
       settings.adblock = value;
-      if (blocker) wiredSessions.forEach((ses) => (value ? blocker.enableBlockingInSession(ses) : blocker.disableBlockingInSession(ses)));
+      wiredSessions.forEach((ses) => setAdblock(ses, value));
     }
     else if (key === 'lang' && LANGS[value]) {
       settings.lang = value;
@@ -985,7 +1002,20 @@ function start() {
   ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile })
     .then((loaded) => {
       blocker = loaded;
-      if (settings.adblock) wiredSessions.forEach((ses) => blocker.enableBlockingInSession(ses));
+      // The library runs every frame's scripts in the main frame: each iframe injects them there
+      // again, and the doubled scriptlets break YouTube. Run them in the frame that asked.
+      ipcMain.handle('@ghostery/adblocker/inject-cosmetic-filters', (event, url, msg) => blocker.onInjectCosmeticFilters({
+        frameId: event.frameId,
+        processId: event.processId,
+        sender: {
+          insertCSS: (css, options) => event.senderFrame === event.sender.mainFrame && event.sender.insertCSS(css, options),
+          // A block keeps each scriptlet's top-level classes (JSONPath) from colliding with the next one's.
+          // Sandboxed about:blank frames refuse scripts and log an error each time.
+          executeJavaScript: (code) => event.senderFrame?.url.startsWith('http') && event.senderFrame.executeJavaScript(`{${code}\n}`, true).catch(() => {}),
+        },
+      }, url, msg));
+      ipcMain.handle('@ghostery/adblocker/is-mutation-observer-enabled', blocker.onIsMutationObserverEnabled);
+      if (settings.adblock) wiredSessions.forEach((ses) => setAdblock(ses, true));
     }, (error) => console.error('Ad blocker:', error.message));
   services = load('services.json', DEFAULT_SERVICES);
   if (!Array.isArray(services)) services = DEFAULT_SERVICES;
