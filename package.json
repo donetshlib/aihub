@@ -1,7 +1,7 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -54,7 +54,13 @@
         "repo": "aihub",
         "releaseType": "release"
       }
-    ]
+    ],
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png",
+      "category": "Network",
+      "synopsis": "AI chats in one window"
+    }
   },
   "dependencies": {
     "@ghostery/adblocker-electron": "2.20.1",
