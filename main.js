@@ -617,6 +617,11 @@ function pageMenu(tab, p) {
   popup(items);
 }
 
+function unload(list) {
+  list.forEach(sleep);
+  render();
+}
+
 function tabMenu(id) {
   const tab = tabs.get(id);
   if (!tab) return;
@@ -626,6 +631,8 @@ function tabMenu(id) {
     { label: t('duplicate'), click: () => showTab(makeTab(tab.serviceId, tab.url, tab.title, tab.favicon)) },
     { label: t('openInBrowser'), click: () => openExternal(tab.url) },
     { label: t('copyAddress'), click: () => clipboard.writeText(tab.url) },
+    // Only tabs off screen: one on screen would be loaded straight back.
+    { label: t('unloadTab'), enabled: !!tab.view && !tab.shown, click: () => unload([tab]) },
     separator,
     { label: t('close'), click: () => closeTab(id) },
     { label: t('closeOthers'), click: () => serviceTabs(tab.serviceId).filter((other) => other !== tab).forEach((other) => closeTab(other.id)) },
@@ -635,6 +642,7 @@ function tabMenu(id) {
 function serviceMenu(id) {
   const service = serviceById(id);
   if (!service) return;
+  const awake = serviceTabs(id).filter((tab) => tab.view && !tab.shown);
   popup([
     { label: t('newTab'), click: () => newTab(id) },
     {
@@ -643,6 +651,7 @@ function serviceMenu(id) {
       click: () => openBeside(serviceTabs(id).find((t) => !panes.includes(t.id)) ?? makeTab(id, service.url)),
     },
     { label: t('neverUnload'), type: 'checkbox', checked: service.neverUnload, click: () => toggleNeverUnload(id) },
+    { label: t('unloadService'), enabled: awake.length > 0, click: () => unload(awake) },
     separator,
     { label: t('signOut'), click: () => signOut([id], t('confirmSignOut', { name: service.name })) },
     { label: t('removeService'), click: () => removeService(id) },
