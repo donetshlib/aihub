@@ -1,0 +1,49 @@
+{
+  "name": "ai-hub",
+  "productName": "AI Hub",
+  "version": "0.3.0",
+  "description": "AI chats in one window: a sidebar of services, tabs, split view",
+  "author": "AI Hub",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.aihub.app",
+    "productName": "AI Hub",
+    "files": [
+      "main.js",
+      "preload.js",
+      "icon.png",
+      "ui/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "ru_RU",
+        "uk_UA",
+        "be_BY",
+        "en_US",
+        "pl_PL",
+        "de_DE",
+        "lt_LT"
+      ],
+      "warningsAsErrors": false
+    }
+  }
+}

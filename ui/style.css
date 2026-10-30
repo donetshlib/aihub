@@ -1,0 +1,995 @@
+/* Palette and look carried over from the Tauri version. */
+:root {
+  --bg: #1e1e1e;
+  --sidebar: #171717;
+  --surface: #2a2a2a;
+  --surface-hover: #333;
+  --panel: #202020;
+  --panel-head: #262626;
+  --input-bg: #171717;
+  --border: #383838;
+  --text: #eaeaea;
+  --text-dim: #8f8f8f;
+  --accent: #22c55e;
+  --accent-text: #08240f;
+  --danger: #ef4444;
+
+  /* Sizes: must match the constants at the top of main.js. */
+  --sidebar-w: 56px;
+  --tabstrip: 36px;
+  --navbar: 44px;
+  --top: 80px;
+  --pane-head: 28px;
+  --gap: 6px;
+  --panel-w: 380px;
+  --left: var(--sidebar-w);
+}
+
+/* "Original" theme: the app icon palette, neon green on deep blue. */
+html[data-theme="original"] {
+  --bg: #10162a;
+  --sidebar: #0a0f20;
+  --surface: #1b2340;
+  --surface-hover: #253057;
+  --panel: #141b33;
+  --panel-head: #1a2240;
+  --input-bg: #0d1326;
+  --border: #2b3763;
+  --text: #e8fff5;
+  --text-dim: #7e90bd;
+  --accent: #5df2a0;
+  --accent-text: #06231a;
+  --danger: #ff6b6b;
+}
+
+html[data-theme="light"] {
+  --bg: #f0f0f0;
+  --sidebar: #e6e6e6;
+  --surface: #fff;
+  --surface-hover: #e0e0e0;
+  --panel: #fbfbfb;
+  --panel-head: #f2f2f2;
+  --input-bg: #fff;
+  --border: #dcdcdc;
+  --text: #1c1c1c;
+  --text-dim: #6b6b6b;
+  --accent: #16a34a;
+  --accent-text: #fff;
+  --danger: #dc2626;
+}
+
+body.panel-open {
+  --left: calc(var(--sidebar-w) + var(--panel-w));
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+input {
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  user-select: text;
+}
+
+select {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---------- Sidebar ---------- */
+
+#sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--sidebar);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+}
+
+#services {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+  padding-top: 2px;
+}
+
+#services::-webkit-scrollbar {
+  width: 0;
+}
+
+.service {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background: var(--surface);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.65;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.service:hover {
+  background: var(--surface-hover);
+  transform: scale(1.06);
+  opacity: 1;
+}
+
+.service.active {
+  border-color: var(--accent);
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Bar on the left of the active service: the border alone is hard to see on colourful favicons. */
+.service.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 4px;
+  height: 24px;
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.service.pinned::after {
+  content: "📌";
+  position: absolute;
+  font-size: 10px;
+  bottom: -2px;
+  right: -2px;
+}
+
+/* No live tabs: grey icon, so it is clear the service holds no memory. */
+.service.sleeping .service-icon {
+  filter: grayscale(1);
+}
+
+/* The site's unread count, or a dot for a finished reply not looked at yet. */
+.service .badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  box-shadow: 0 0 0 2px var(--sidebar);
+}
+
+.service .badge.dot {
+  min-width: 10px;
+  height: 10px;
+  padding: 0;
+  top: -3px;
+  right: -3px;
+  background: var(--accent);
+}
+
+.tab.unread .tab-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.service-icon,
+.tab-favicon,
+.preset-icon,
+.row-icon {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  color: #fff;
+  font-weight: 600;
+}
+
+.service-icon img,
+.tab-favicon img,
+.preset-icon img,
+.row-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.service-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+#add-btn,
+#settings-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--surface);
+  flex-shrink: 0;
+  margin-top: 8px;
+  font-size: 20px;
+}
+
+#add-btn:hover,
+#settings-btn:hover {
+  background: var(--surface-hover);
+}
+
+/* Drop marker while reordering by drag and drop. */
+#services .service.drop-before { box-shadow: 0 -4px 0 -1px var(--accent); }
+#services .service.drop-after { box-shadow: 0 4px 0 -1px var(--accent); }
+#tabs .tab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
+#tabs .tab.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
+.dragged { opacity: 0.45; }
+
+/* ---------- Tab strip and toolbar ---------- */
+
+#topbar {
+  position: fixed;
+  top: 0;
+  left: var(--left);
+  right: 0;
+  height: var(--top);
+  background: var(--sidebar);
+}
+
+#tabstrip {
+  height: var(--tabstrip);
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 6px;
+}
+
+#tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 1 210px;
+  min-width: 52px;
+  height: 31px;
+  padding: 0 4px 0 10px;
+  border-radius: 10px 10px 0 0;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tab.sleeping .tab-title {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+.tab-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.tab-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+#new-tab {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--text-dim);
+}
+
+#new-tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid var(--text-dim);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+#navbar {
+  height: var(--navbar);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+#navbar button {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+#navbar button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+#address-form {
+  flex: 1;
+  min-width: 0;
+}
+
+#address {
+  width: 100%;
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+#find {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#find-input {
+  width: 190px;
+  padding: 6px 11px;
+}
+
+#find-count {
+  min-width: 44px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+#downloads-btn {
+  position: relative;
+}
+
+#dl-badge {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+/* ---------- Split view chrome ---------- */
+
+.pane-head,
+.divider {
+  position: fixed;
+  top: var(--top);
+}
+
+.pane-head {
+  height: var(--pane-head);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  background: var(--sidebar);
+  border-bottom: 2px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.pane-head.focused {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.pane-name {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pane-close {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.pane-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.divider {
+  bottom: 0;
+  width: var(--gap);
+  background: var(--bg);
+  cursor: col-resize;
+}
+
+.divider:hover,
+body.dragging .divider {
+  background: var(--accent);
+}
+
+body.dragging {
+  cursor: col-resize;
+}
+
+#empty {
+  position: fixed;
+  top: var(--top);
+  left: var(--left);
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+}
+
+/* ---------- Side panel ---------- */
+
+#panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: var(--sidebar-w);
+  width: var(--panel-w);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  animation: slide 0.16s ease-out;
+}
+
+@keyframes slide {
+  from { transform: translateX(-12px); opacity: 0; }
+}
+
+#panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--panel-head);
+  border-bottom: 1px solid var(--border);
+}
+
+#panel h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#close-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+#close-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+#panel-body {
+  flex: 1;
+  padding: 2px 16px 18px;
+  overflow-y: auto;
+}
+
+.caption {
+  margin: 18px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* Presets */
+#presets {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg);
+  font-size: 12px;
+}
+
+.preset:hover {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.preset-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.field span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.actions button {
+  padding: 9px 16px;
+  border-radius: 10px;
+}
+
+.actions .ghost {
+  border: 1px solid var(--border);
+}
+
+.actions .ghost:hover {
+  background: var(--surface-hover);
+}
+
+.actions .primary {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.actions .primary:hover {
+  filter: brightness(1.08);
+}
+
+/* Service list in settings */
+#service-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.service-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--input-bg);
+  font-size: 14px;
+}
+
+.service-row:hover {
+  border-color: var(--border);
+}
+
+.service-row.current {
+  border-color: var(--accent);
+}
+
+.row-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.service-row .pin {
+  padding: 4px;
+  font-size: 11px;
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+.service-row .pin.on {
+  opacity: 1;
+  filter: none;
+}
+
+.service-row .del {
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-radius: 6px;
+}
+
+.service-row .del:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* Segmented control */
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg);
+}
+
+.segmented button {
+  flex: 1;
+  min-width: 56px;
+  padding: 7px 8px;
+  color: var(--text-dim);
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.danger {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--danger);
+}
+
+.danger:hover {
+  border-color: var(--danger);
+}
+
+/* Downloads */
+.download {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+
+.download.cancelled,
+.download.interrupted {
+  opacity: 0.7;
+}
+
+.dl-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.dl-icon img {
+  width: 32px;
+  height: 32px;
+}
+
+.dl-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.dl-name {
+  padding-right: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+}
+
+.dl-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.download.interrupted .dl-meta {
+  color: var(--danger);
+}
+
+.dl-bar {
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface);
+}
+
+.dl-bar > div {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.dl-bar.paused > div {
+  background: var(--text-dim);
+}
+
+.dl-bar.unknown > div {
+  width: 30%;
+  animation: dl-slide 1.2s linear infinite;
+}
+
+@keyframes dl-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+.dl-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dl-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  opacity: 0;
+}
+
+.download:hover .dl-remove {
+  opacity: 1;
+}
+
+.dl-remove:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+#downloads-btn.busy::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  bottom: 3px;
+  width: calc(100% - 12px);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.dl-actions button,
+.ghost-wide {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.dl-actions button:hover,
+.ghost-wide:hover {
+  background: var(--surface-hover);
+}
+
+.ghost-wide {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* Checkbox rows (settings, downloads) */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Download folder */
+.dl-dir {
+  display: flex;
+  gap: 6px;
+}
+
+#dl-dir-path {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--input-bg);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl; /* long paths keep their end, the folder name, in view */
+}
+
+#dl-dir-path:hover {
+  background: var(--surface-hover);
+}
+
+#dl-dir-change {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+#dl-dir-change:hover {
+  background: var(--surface-hover);
+}

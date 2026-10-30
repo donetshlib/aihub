@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline'" />
+    <title>AI Hub</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="i18n.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+
+  <!-- data-i18n fills text, data-i18n-title a tooltip (plus data-hotkey), data-i18n-placeholder a placeholder. -->
+  <body>
+    <nav id="sidebar">
+      <div id="services"></div>
+      <button id="add-btn" data-i18n-title="addService">+</button>
+      <button id="settings-btn" data-i18n-title="settings">⚙</button>
+    </nav>
+
+    <header id="topbar">
+      <div id="tabstrip">
+        <div id="tabs"></div>
+        <button id="new-tab" data-i18n-title="newTab" data-hotkey="Ctrl+T">+</button>
+      </div>
+      <div id="navbar">
+        <button id="back" data-i18n-title="back" data-hotkey="Alt+←">←</button>
+        <button id="forward" data-i18n-title="forward" data-hotkey="Alt+→">→</button>
+        <button id="reload">⟳</button>
+        <form id="address-form"><input id="address" spellcheck="false" data-i18n-placeholder="addressPlaceholder" /></form>
+        <div id="find" hidden>
+          <input id="find-input" spellcheck="false" data-i18n-placeholder="findPlaceholder" />
+          <span id="find-count"></span>
+          <button id="find-prev" data-i18n-title="findPrev" data-hotkey="Shift+Enter">↑</button>
+          <button id="find-next" data-i18n-title="findNext" data-hotkey="Enter">↓</button>
+          <button id="find-close" data-i18n-title="close" data-hotkey="Esc">✕</button>
+        </div>
+        <button id="downloads-btn" data-i18n-title="downloads">⬇<span id="dl-badge" hidden></span></button>
+      </div>
+    </header>
+
+    <div id="panes"></div>
+    <div id="empty" data-i18n="emptyHint" hidden></div>
+
+    <aside id="panel" hidden>
+      <header>
+        <h1 id="panel-title"></h1>
+        <button type="button" id="close-btn" data-i18n-title="close">✕</button>
+      </header>
+
+      <div id="panel-body">
+        <section id="view-add" hidden>
+          <p class="caption" data-i18n="presets"></p>
+          <div id="presets"></div>
+          <p class="hint" data-i18n="presetsHint"></p>
+
+          <form id="add-form">
+            <p class="caption" data-i18n="ownService"></p>
+            <label class="field"><span data-i18n="name"></span><input id="add-name" placeholder="MyService" /></label>
+            <label class="field"><span data-i18n="url"></span><input id="add-url" required placeholder="https://example.com" /></label>
+            <div class="actions">
+              <button type="button" class="ghost" id="add-cancel" data-i18n="cancel"></button>
+              <button type="submit" class="primary" data-i18n="add"></button>
+            </div>
+          </form>
+        </section>
+
+        <section id="view-settings" hidden>
+          <p class="caption" data-i18n="services"></p>
+          <div id="service-rows"></div>
+
+          <p class="caption" data-i18n="language"></p>
+          <select id="lang"></select>
+          <p class="hint" data-i18n="siteLangHint"></p>
+
+          <p class="caption" data-i18n="theme"></p>
+          <div class="segmented" id="theme-seg">
+            <button type="button" data-value="dark" data-i18n="dark"></button>
+            <button type="button" data-value="light" data-i18n="light"></button>
+            <button type="button" data-value="original" data-i18n="original"></button>
+          </div>
+
+          <p class="caption" data-i18n="unloadAfter"></p>
+          <div class="segmented" id="unload-seg">
+            <button type="button" data-value="1">1 <span data-i18n="min"></span></button>
+            <button type="button" data-value="5">5 <span data-i18n="min"></span></button>
+            <button type="button" data-value="15">15 <span data-i18n="min"></span></button>
+            <button type="button" data-value="30">30 <span data-i18n="min"></span></button>
+            <button type="button" data-value="0" data-i18n="never"></button>
+          </div>
+          <p class="hint" data-i18n="unloadHint"></p>
+
+          <p class="caption" data-i18n="notifications"></p>
+          <label class="check"><input type="checkbox" id="notify" /><span data-i18n="notifyReply"></span></label>
+
+          <p class="caption" data-i18n="permissions"></p>
+          <button type="button" id="reset-permissions" class="ghost-wide" data-i18n="resetPermissions"></button>
+          <p class="hint" data-i18n="permissionsHint"></p>
+
+          <p class="caption" data-i18n="accounts"></p>
+          <button type="button" id="sign-out-all" class="danger" data-i18n="signOutAll"></button>
+          <p class="hint" data-i18n="signOutHint"></p>
+
+          <p class="caption" data-i18n="hotkeys"></p>
+          <p class="hint" data-i18n="hotkeysList"></p>
+        </section>
+
+        <section id="view-downloads" hidden>
+          <p class="caption" data-i18n="saveTo"></p>
+          <div class="dl-dir">
+            <button type="button" id="dl-dir-path"></button>
+            <button type="button" id="dl-dir-change" data-i18n="change"></button>
+          </div>
+          <label class="check"><input type="checkbox" id="dl-ask" /><span data-i18n="askWhere"></span></label>
+          <p class="caption" data-i18n="downloads"></p>
+          <div id="dl-list"></div>
+          <button type="button" id="dl-clear" class="ghost-wide" data-i18n="clearList"></button>
+        </section>
+      </div>
+    </aside>
+  </body>
+</html>
