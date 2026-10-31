@@ -72,6 +72,7 @@ const chromeExtensions = new Map(); // session -> ElectronChromeExtensions
 const extensionIcons = new Map(); // extension path -> NativeImage
 let blocker = null; // ad blocker, loaded once at startup
 const adblockPreloads = new Map(); // session -> id of the blocker's preload
+let fullscreenTab = null; // a page in HTML fullscreen (a video player) covers the whole screen
 let selectedContents = null; // the tab the extensions were last told is active
 
 /* ---------- Files ---------- */
@@ -179,6 +180,18 @@ function ensureView(tab) {
     if (i >= 0 && i !== focused) { focused = i; render(); }
   });
   wc.on('found-in-page', (_, result) => ui.send('find-result', result));
+  wc.on('enter-html-full-screen', () => {
+    fullscreenTab = tab;
+    win.setFullScreen(true);
+    render();
+  });
+  wc.on('leave-html-full-screen', () => {
+    fullscreenTab = null;
+    win.setFullScreen(false);
+    render();
+  });
+  // Ctrl + mouse wheel: Electron reports it, the zooming is up to the app.
+  wc.on('zoom-changed', (_, direction) => zoom(wc, direction === 'in' ? 0.5 : -0.5));
   wc.on('before-input-event', onKey);
   wc.on('before-input-event', (_, input) => {
     if ((input.type === 'keyDown' && input.key === 'Enter') || input.type === 'mouseDown') tab.inputAt = Date.now();
@@ -431,11 +444,18 @@ function layout() {
       tab.view?.setVisible(false);
     }
   }
+  // A fullscreen page that was closed or unloaded never says it left.
+  if (fullscreenTab && (!fullscreenTab.view || !panes.includes(fullscreenTab.id))) {
+    fullscreenTab = null;
+    win.setFullScreen(false);
+  }
   panes.forEach((id, i) => {
     const tab = tabs.get(id);
     const view = ensureView(tab);
-    view.setBounds(rects[i]);
-    view.setVisible(true);
+    const full = tab === fullscreenTab;
+    view.setBounds(full ? { x: 0, y: 0, width, height } : rects[i]);
+    view.setVisible(!fullscreenTab || full);
+    if (full) win.contentView.addChildView(view); // above the other panes and the suggestions
     tab.shown = true;
     if (win.isFocused()) tab.unread = false;
   });
