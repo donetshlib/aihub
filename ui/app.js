@@ -184,6 +184,10 @@ function renderNav() {
   $('reload').textContent = nav?.loading ? '✕' : '⟳';
   $('reload').title = nav?.loading ? t('stop') : withHotkey(t('reload'), 'F5');
   $('address').disabled = !nav;
+  // Like Chrome: the zoom shows only when it is not 100%, a click puts it back.
+  $('zoom').hidden = !nav || nav.zoom === 100;
+  $('zoom').textContent = `${nav?.zoom}%`;
+  $('zoom').title = withHotkey(t('zoomReset'), 'Ctrl+0');
   $('star').disabled = !nav?.canBookmark;
   $('star').textContent = nav?.bookmarked ? '★' : '☆';
   $('star').classList.toggle('on', !!nav?.bookmarked);
@@ -499,6 +503,7 @@ $('extensions-btn').onclick = () => toggleView('extensions');
 $('bookmarks-btn').onclick = () => toggleView('bookmarks');
 $('history-btn').onclick = () => toggleView('history');
 $('star').onclick = () => send('toggleBookmark');
+$('zoom').onclick = () => send('zoomReset');
 $('history-search').oninput = (e) => send('historySearch', e.target.value);
 $('history-clear').onclick = () => send('clearHistory');
 const rename = () => send('renameService', { id: editing, name: $('edit-name').value });

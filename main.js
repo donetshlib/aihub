@@ -191,7 +191,13 @@ function ensureView(tab) {
     render();
   });
   // Ctrl + mouse wheel: Electron reports it, the zooming is up to the app.
-  wc.on('zoom-changed', (_, direction) => zoom(wc, direction === 'in' ? 0.5 : -0.5));
+  // Each wheel notch arrives twice within the same millisecond, so the second one is dropped.
+  let zoomedAt = 0;
+  wc.on('zoom-changed', (_, direction) => {
+    if (Date.now() - zoomedAt < 30) return;
+    zoomedAt = Date.now();
+    zoom(wc, direction === 'in' ? 1 : -1);
+  });
   wc.on('before-input-event', onKey);
   wc.on('before-input-event', (_, input) => {
     if ((input.type === 'keyDown' && input.key === 'Enter') || input.type === 'mouseDown') tab.inputAt = Date.now();
@@ -503,6 +509,7 @@ function render() {
           url: tab.url, loading: tab.loading, canBack: !!wc?.navigationHistory.canGoBack(), canForward: !!wc?.navigationHistory.canGoForward(),
           partition: partitionOf(tab.serviceId), contentsId: wc?.id ?? null,
           bookmarked: bookmarks.some((b) => b.url === tab.url), canBookmark: isWeb(tab.url),
+          zoom: Math.round((wc?.getZoomFactor() ?? 1) * 100),
         }
       : null,
     extensions: listExtensions(wc?.session),
@@ -880,8 +887,15 @@ function toUrl(text) {
   return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
 }
 
+// Chrome's zoom steps; a step of 0 goes back to 100%.
+const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+
 function zoom(wc, step) {
-  if (wc) wc.setZoomLevel(step === 0 ? 0 : wc.getZoomLevel() + step);
+  if (!wc) return;
+  const now = wc.getZoomFactor();
+  const next = step === 0 ? 1 : step > 0 ? ZOOM_STEPS.find((f) => f > now + 0.001) : ZOOM_STEPS.findLast((f) => f < now - 0.001);
+  if (next) wc.setZoomFactor(next);
+  render();
 }
 
 // Shortcuts by physical key (input.code), so they work in any keyboard layout.
@@ -1155,6 +1169,7 @@ const actions = {
     render();
   },
   openUrl,
+  zoomReset: () => zoom(currentContents(), 0),
   openUrlInBackground: (url) => {
     const service = current()?.serviceId ?? services[0]?.id;
     if (service && isWeb(url)) {

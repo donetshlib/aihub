@@ -1173,3 +1173,11 @@ html.suggest-page body {
   background: var(--surface-hover);
   color: var(--text);
 }
+
+#navbar #zoom {
+  width: auto;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+}
