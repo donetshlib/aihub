@@ -70,7 +70,7 @@ function sortable(nodes, axis, onMove) {
 
   nodes.forEach((node, from) => {
     node.addEventListener('mousedown', (down) => {
-      if (down.button !== 0 || down.target.closest('.tab-close')) return;
+      if (down.button !== 0 || down.target.closest('.tab-close, .tab-audio')) return;
       const start = coord(down);
       let to = from; // insertion point in the list as it was before the drag
       const move = (e) => {
@@ -151,6 +151,15 @@ function renderTabs(force) {
   },
   tab.loading ? el('span', { className: 'spinner' }) : icon(tab.favicon, tab.title, 'tab-favicon'),
   tab.pinned ? '' : el('span', { className: 'tab-title', textContent: tab.title }),
+  tab.audible || tab.muted ? el('button', {
+    className: 'tab-audio',
+    textContent: tab.muted ? '🔇' : '🔊',
+    title: t(tab.muted ? 'unmuteTab' : 'muteTab'),
+    onclick: (e) => {
+      e.stopPropagation();
+      send('toggleMute', tab.id);
+    },
+  }) : '',
   tab.pinned ? '' : el('button', {
     className: 'tab-close',
     textContent: '✕',
@@ -188,6 +197,9 @@ function renderNav() {
   $('zoom').hidden = !nav || nav.zoom === 100;
   $('zoom').textContent = `${nav?.zoom}%`;
   $('zoom').title = withHotkey(t('zoomReset'), 'Ctrl+0');
+  $('reader').disabled = !nav?.canBookmark;
+  $('reader').classList.toggle('on', !!nav?.reader);
+  $('reader').title = withHotkey(t(nav?.reader ? 'closeReader' : 'reader'), nav?.reader ? 'Esc' : '');
   $('star').disabled = !nav?.canBookmark;
   $('star').textContent = nav?.bookmarked ? '★' : '☆';
   $('star').classList.toggle('on', !!nav?.bookmarked);
@@ -357,6 +369,8 @@ function renderSettings() {
   markSegment($('theme-seg'), state.settings.theme);
   markSegment($('unload-seg'), state.settings.unloadMinutes);
   $('notify').checked = state.settings.notify;
+  $('dark-sites').checked = state.settings.darkSites;
+  $('global-hotkey').checked = state.settings.globalHotkey;
   $('service-rows').replaceChildren(...state.services.filter((s) => !s.parent).map((s) => el('div', {
     className: 'service-row' + (s.id === state.activeService ? ' current' : ''),
   },
@@ -533,6 +547,9 @@ $('dl-dir-change').onclick = () => send('chooseDownloadDir');
 $('dl-ask').onchange = (e) => send('setting', { key: 'askDownload', value: e.target.checked });
 $('adblock').onchange = (e) => send('setting', { key: 'adblock', value: e.target.checked });
 $('notify').onchange = (e) => send('setting', { key: 'notify', value: e.target.checked });
+$('dark-sites').onchange = (e) => send('setting', { key: 'darkSites', value: e.target.checked });
+$('global-hotkey').onchange = (e) => send('setting', { key: 'globalHotkey', value: e.target.checked });
+$('reader').onclick = () => send('toggleReader');
 
 $('theme-seg').onclick = (e) => {
   const value = e.target.closest('button')?.dataset.value;

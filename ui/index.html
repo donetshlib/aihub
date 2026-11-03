@@ -28,6 +28,7 @@
         <button id="reload">⟳</button>
         <form id="address-form"><input id="address" spellcheck="false" autocomplete="off" data-i18n-placeholder="addressPlaceholder" /></form>
         <button id="zoom" hidden></button>
+        <button id="reader" data-i18n-title="reader">📖</button>
         <button id="star" data-i18n-title="addBookmark" data-hotkey="Ctrl+D">☆</button>
         <div id="find" hidden>
           <input id="find-input" spellcheck="false" data-i18n-placeholder="findPlaceholder" />
@@ -85,6 +86,9 @@
             <button type="button" data-value="original" data-i18n="original"></button>
           </div>
 
+          <label class="check"><input type="checkbox" id="dark-sites" /><span data-i18n="darkSites"></span></label>
+          <p class="hint" data-i18n="darkSitesHint"></p>
+
           <p class="caption" data-i18n="unloadAfter"></p>
           <div class="segmented" id="unload-seg">
             <button type="button" data-value="1">1 <span data-i18n="min"></span></button>
@@ -107,6 +111,7 @@
           <p class="hint" data-i18n="signOutHint"></p>
 
           <p class="caption" data-i18n="hotkeys"></p>
+          <label class="check"><input type="checkbox" id="global-hotkey" /><span data-i18n="globalHotkey"></span></label>
           <p class="hint" data-i18n="hotkeysList"></p>
         </section>
 

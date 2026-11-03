@@ -2,7 +2,7 @@
 // The window's own page (ui/) draws the sidebar, tab strip, toolbar and side panel; every tab
 // is a WebContentsView laid over the content area. All tab state lives here, the UI only
 // renders the snapshot it is sent.
-const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, nativeImage, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, globalShortcut, Notification, dialog, nativeImage, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const fs = require('node:fs');
@@ -37,7 +37,9 @@ const DEFAULT_SERVICES = PRESETS.filter((p) => p.name !== 'Perplexity').map((p) 
 }));
 const DEFAULT_SETTINGS = {
   theme: 'dark', unloadMinutes: 15, lang: null, bounds: null, maximized: false, notify: true, downloadDir: null, askDownload: false, adblock: true,
+  darkSites: false, globalHotkey: false,
 };
+const GLOBAL_HOTKEY = 'Ctrl+Shift+Space';
 const THEMES = { dark: 'dark', light: 'light', original: 'dark' }; // app theme -> what sites see
 // Granted without asking: pages need them for plain things like a "copy" button or fullscreen video.
 const ALWAYS_ALLOWED = new Set(['clipboard-sanitized-write', 'fullscreen', 'storage-access', 'top-level-storage-access']);
@@ -63,6 +65,10 @@ let bookmarks = [];
 let suggestView = null; // address bar suggestions, a view of its own to sit above the tab views
 let suggestions = [];
 let selectedSuggestion = -1;
+let suggestText = ''; // what the suggestions are for, to drop late answers from Google
+let suggestRect = null;
+let localSuggestions = [];
+let searchSuggestions = [];
 const downloads = [];
 const downloadItems = new Map();
 let nextDownloadId = 1;
@@ -155,7 +161,7 @@ function ensureView(tab) {
     }
     render();
   };
-  wc.on('did-navigate', onNavigate);
+  wc.on('did-navigate', () => { tab.reader = false; onNavigate(); });
   wc.on('did-navigate-in-page', onNavigate);
   wc.on('did-fail-load', (_, code, description, url, isMainFrame) => {
     // -3 (ERR_ABORTED) is a navigation cut short by another one, not a failure.
@@ -173,6 +179,8 @@ function ensureView(tab) {
     updateHistory(tab, { favicon: tab.favicon });
     render();
   });
+  wc.setAudioMuted(!!tab.muted);
+  wc.on('audio-state-changed', render);
   wc.on('did-start-loading', () => { tab.loading = true; render(); });
   wc.on('did-stop-loading', () => { tab.loading = false; render(); });
   wc.on('focus', () => {
@@ -305,6 +313,12 @@ function cycleTab(step) {
   showTab(list[(list.indexOf(tab) + step + list.length) % list.length]);
 }
 
+function toggleMute(tab) {
+  tab.muted = !tab.muted;
+  tab.view?.webContents.setAudioMuted(tab.muted);
+  render();
+}
+
 function togglePin(tab) {
   tab.pinned = !tab.pinned;
   // Pinned tabs go first, the rest keep their order.
@@ -363,13 +377,21 @@ function openUrl(url) {
 
 /* ---------- Address bar suggestions ---------- */
 
-// Open tabs of every service first (that is also the tab search), then bookmarks, then history.
+// Services and open tabs of every service first (that is the tab search, Ctrl+K), then
+// Google's search suggestions, which come a moment later, then bookmarks and history.
 function suggest(arg) {
   const text = typeof arg?.text === 'string' ? arg.text.trim() : '';
   const rect = arg?.rect;
   selectedSuggestion = -1;
+  suggestText = text && rect ? text : '';
+  suggestRect = rect;
   suggestions = [];
-  if (text && rect) {
+  searchSuggestions = [];
+  if (suggestText) {
+    const name = text.toLowerCase();
+    for (const s of services.filter((s) => s.name.toLowerCase().includes(name)).slice(0, 2)) {
+      suggestions.push({ type: 'service', serviceId: s.id, url: s.url, title: s.name, favicon: s.icon ?? favicon(s.url) });
+    }
     const match = matches(text);
     const seen = new Set();
     const take = (list, type, n) => {
@@ -387,7 +409,28 @@ function suggest(arg) {
     take([...tabs.values()].filter((tab) => tab !== current()), 'tab', 3);
     take(bookmarks, 'bookmark', 3);
     take(history, 'history', 8 - suggestions.length);
+    searchGoogle(text);
   }
+  localSuggestions = suggestions;
+  showSuggestions();
+}
+
+async function searchGoogle(text) {
+  try {
+    const response = await fetch(`https://suggestqueries.google.com/complete/search?client=chrome&ie=utf-8&oe=utf-8&hl=${settings.lang}&q=${encodeURIComponent(text)}`);
+    const [, list] = await response.json();
+    // Not when the text changed meanwhile or a row is already picked with the arrows.
+    if (text !== suggestText || selectedSuggestion >= 0) return;
+    searchSuggestions = list.filter((q) => q.toLowerCase() !== text.toLowerCase()).slice(0, 4)
+      .map((q) => ({ type: 'search', title: q, url: `https://www.google.com/search?q=${encodeURIComponent(q)}`, favicon: null }));
+    showSuggestions();
+  } catch {} // offline: the local suggestions are enough
+}
+
+function showSuggestions() {
+  const first = localSuggestions.filter((s) => s.type === 'service' || s.type === 'tab');
+  suggestions = [...first, ...searchSuggestions, ...localSuggestions.slice(first.length)];
+  const rect = suggestRect;
   ui.send('suggestions', suggestions.length);
   if (!suggestions.length) return suggestView?.setVisible(false);
   if (!suggestView) {
@@ -411,6 +454,7 @@ function pickSuggestion(i) {
   suggestView?.setVisible(false);
   if (!item) return;
   if (item.type === 'tab' && tabs.has(item.tabId)) showTab(tabs.get(item.tabId));
+  else if (item.type === 'service') selectService(item.serviceId);
   else openUrl(item.url);
 }
 
@@ -500,7 +544,7 @@ function render() {
     tabs: tab
       ? serviceTabs(tab.serviceId).map((t) => ({
           id: t.id, title: t.title || t.url, favicon: t.favicon, loading: t.loading, sleeping: !t.view, unread: !!t.unread, active: t.id === tab.id,
-          pinned: !!t.pinned,
+          pinned: !!t.pinned, muted: !!t.muted, audible: !!t.view?.webContents.isCurrentlyAudible(),
         }))
       : [],
     panes: rects.map((r, i) => ({ id: panes[i], title: tabs.get(panes[i]).title, x: r.x, width: r.width, focused: i === focused })),
@@ -510,6 +554,7 @@ function render() {
           partition: partitionOf(tab.serviceId), contentsId: wc?.id ?? null,
           bookmarked: bookmarks.some((b) => b.url === tab.url), canBookmark: isWeb(tab.url),
           zoom: Math.round((wc?.getZoomFactor() ?? 1) * 100),
+          reader: !!tab.reader,
         }
       : null,
     extensions: listExtensions(wc?.session),
@@ -519,6 +564,7 @@ function render() {
     settings: {
       theme: settings.theme, unloadMinutes: settings.unloadMinutes, lang: settings.lang,
       notify: settings.notify, downloadDir: downloadDir(), askDownload: settings.askDownload, adblock: settings.adblock,
+      darkSites: settings.darkSites, globalHotkey: settings.globalHotkey,
     },
   });
 }
@@ -906,6 +952,7 @@ function onKey(event, input) {
   const wc = currentContents();
   const history = wc?.navigationHistory;
   if (code === 'Escape') {
+    if (current()?.reader) toggleReader(current());
     ui.send('cmd', 'escape');
     return;
   }
@@ -914,7 +961,7 @@ function onKey(event, input) {
   else if (ctrl && code === 'KeyW') current() && closeTab(current().id);
   else if (ctrl && code === 'Tab') cycleTab(input.shift ? -1 : 1);
   else if (ctrl && code === 'KeyF') ui.send('cmd', 'find');
-  else if (ctrl && code === 'KeyL') ui.send('cmd', 'address');
+  else if (ctrl && (code === 'KeyL' || code === 'KeyK' || code === 'KeyE')) ui.send('cmd', 'address');
   else if ((ctrl && code === 'KeyR') || code === 'F5') reload(current());
   else if (input.alt && code === 'ArrowLeft') history?.goBack();
   else if (input.alt && code === 'ArrowRight') history?.goForward();
@@ -998,6 +1045,53 @@ function showOriginal(tab) {
 }
 const translateTextUrl = (text) => `https://translate.google.com/?sl=auto&tl=${settings.lang}&op=translate&text=${encodeURIComponent(text)}`;
 
+// Reader mode: Firefox's Readability picks the article out of a copy of the page, shown over
+// the page itself in a shadow root, so the site's styles and scripts stay out of it.
+const READER_WORLD = 1002;
+const READABILITY = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf8');
+const READER = (dark) => `(() => {
+  const open = document.getElementById('aihub-reader');
+  if (open) {
+    open.remove();
+    document.documentElement.style.overflow = '';
+    return false;
+  }
+  const article = new Readability(document.cloneNode(true)).parse();
+  if (!article?.content) return null;
+  const host = document.createElement('div');
+  host.id = 'aihub-reader';
+  host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;';
+  const root = host.attachShadow({ mode: 'closed' });
+  const css = new CSSStyleSheet(); // a constructed sheet: the site's CSP does not stop it
+  css.replaceSync(\`
+    :host { all: initial; }
+    .reader-scroll { position: absolute; inset: 0; overflow: auto; background: ${dark ? '#1e1e1e' : '#f7f5f0'}; color: ${dark ? '#ddd' : '#222'}; }
+    article { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; font: 19px/1.7 Georgia, serif; }
+    h1 { font: 700 32px/1.25 system-ui, sans-serif; margin: 0 0 8px; }
+    .meta { font: 14px system-ui, sans-serif; opacity: .6; margin-bottom: 32px; }
+    img, video, figure { max-width: 100%; height: auto; }
+    a { color: ${dark ? '#8ab4f8' : '#1a0dab'}; }
+    pre, code { font-size: 15px; white-space: pre-wrap; }
+  \`);
+  root.adoptedStyleSheets = [css];
+  root.innerHTML = '<div class="reader-scroll"><article><h1></h1><div class="meta"></div><div class="content"></div></article></div>';
+  root.querySelector('h1').textContent = article.title || document.title;
+  root.querySelector('.meta').textContent = [article.byline, article.siteName].filter(Boolean).join(' · ');
+  root.querySelector('.content').innerHTML = article.content;
+  document.documentElement.style.overflow = 'hidden';
+  document.documentElement.append(host);
+  return true;
+})()`;
+
+async function toggleReader(tab) {
+  const wc = tab?.view?.webContents;
+  if (!wc || !isWeb(tab.url)) return;
+  const shown = await wc.executeJavaScriptInIsolatedWorld(READER_WORLD, [{ code: `${READABILITY}\n${READER(settings.theme !== 'light')}` }]).catch(() => null);
+  if (shown === null) dialog.showMessageBox(win, { type: 'info', message: t('noArticle') });
+  tab.reader = !!shown;
+  render();
+}
+
 async function savePage(wc) {
   if (!wc) return;
   const name = wc.getTitle().replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 100) || 'page';
@@ -1061,6 +1155,7 @@ function pageMenu(tab, p) {
     tab.translated
       ? { label: t('showOriginal'), click: () => showOriginal(tab) }
       : { label: t('translatePage'), enabled: isWeb(tab.url), click: () => translatePage(tab) },
+    { label: t(tab.reader ? 'closeReader' : 'reader'), enabled: isWeb(tab.url), click: () => toggleReader(tab) },
     { label: t('print'), accelerator: 'Ctrl+P', click: () => wc.print() },
     { label: t('savePage'), accelerator: 'Ctrl+S', click: () => savePage(wc) },
     separator,
@@ -1082,6 +1177,7 @@ function tabMenu(id) {
     { label: t('openBeside'), enabled: !panes.includes(id) && panes.length < MAX_PANES, click: () => openBeside(tab) },
     { label: t('reload'), click: () => reload(tab) },
     { label: t(tab.pinned ? 'unpinTab' : 'pinTab'), click: () => togglePin(tab) },
+    { label: t(tab.muted ? 'unmuteTab' : 'muteTab'), click: () => toggleMute(tab) },
     { label: t('duplicate'), click: () => showTab(makeTab(tab.serviceId, tab.url, tab.title, tab.favicon)) },
     { label: t('openInBrowser'), click: () => openExternal(tab.url) },
     { label: t('copyAddress'), click: () => clipboard.writeText(tab.url) },
@@ -1167,6 +1263,8 @@ const actions = {
   },
   pickSuggestion,
   toggleBookmark: () => toggleBookmark(),
+  toggleReader: () => toggleReader(current()),
+  toggleMute: (id) => tabs.has(id) && toggleMute(tabs.get(id)),
   removeBookmark: (url) => {
     bookmarks = bookmarks.filter((b) => b.url !== url);
     save('bookmarks.json', bookmarks);
@@ -1250,6 +1348,9 @@ const actions = {
       settings.adblock = value;
       wiredSessions.forEach((ses) => setAdblock(ses, value));
     }
+    else if (key === 'globalHotkey' && typeof value === 'boolean') settings.globalHotkey = setGlobalHotkey(value) && value;
+    // Chromium's own darkening of light pages: a switch read at startup, so it waits for a restart.
+    else if (key === 'darkSites' && typeof value === 'boolean') settings.darkSites = value;
     else if (key === 'lang' && LANGS[value]) {
       settings.lang = value;
       wiredSessions.forEach(setSiteLanguage);
@@ -1363,6 +1464,21 @@ ipcMain.on('ui', (event, action, arg) => {
 
 /* ---------- Startup ---------- */
 
+function showOrHide() {
+  if (win.isFocused() && win.isVisible() && !win.isMinimized()) return win.minimize();
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  currentContents()?.focus();
+}
+
+function setGlobalHotkey(on) {
+  globalShortcut.unregister(GLOBAL_HOTKEY);
+  if (!on || globalShortcut.register(GLOBAL_HOTKEY, showOrHide)) return true;
+  dialog.showMessageBox(win, { type: 'warning', message: t('hotkeyBusy', { key: GLOBAL_HOTKEY }) });
+  return false;
+}
+
 function onScreen(bounds) {
   return screen.getAllDisplays().some(({ workArea: a }) =>
     bounds.x < a.x + a.width && bounds.x + bounds.width > a.x && bounds.y < a.y + a.height && bounds.y + bounds.height > a.y);
@@ -1450,6 +1566,7 @@ function start() {
   else if (services[0]) selectService(services[0].id);
 
   setInterval(unloadIdleTabs, 15_000);
+  if (settings.globalHotkey) setGlobalHotkey(true);
 }
 
 // Sites learn the language from the Accept-Language header (changed at once) and from
@@ -1463,6 +1580,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   settings = { ...DEFAULT_SETTINGS, ...load('settings.json', {}) };
   if (LANGS[settings.lang]) app.commandLine.appendSwitch('lang', settings.lang === 'en' ? 'en-US' : settings.lang);
+  if (settings.darkSites) app.commandLine.appendSwitch('blink-settings', 'forceDarkModeEnabled=true');
   app.on('second-instance', () => {
     if (win.isMinimized()) win.restore();
     win.focus();

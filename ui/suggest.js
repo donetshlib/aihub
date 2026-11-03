@@ -4,7 +4,7 @@ const { send, on } = window.hub;
 
 on('suggestions', ({ list, selected, theme, lang }) => {
   document.documentElement.dataset.theme = theme;
-  const tags = { tab: (s) => `${translate(lang, 'openTab')} · ${s.service}`, bookmark: () => '★', history: () => '' };
+  const tags = { tab: (s) => `${translate(lang, 'openTab')} · ${s.service}`, bookmark: () => '★', history: () => '', search: () => '', service: () => '' };
   document.getElementById('suggest-list').replaceChildren(...list.map((s, i) => {
     const row = document.createElement('div');
     row.className = 'suggestion' + (i === selected ? ' selected' : '');
@@ -19,10 +19,11 @@ on('suggestions', ({ list, selected, theme, lang }) => {
     text.className = 'suggestion-text';
     text.append(
       Object.assign(document.createElement('span'), { className: 'suggestion-title', textContent: s.title }),
-      Object.assign(document.createElement('span'), { className: 'suggestion-url', textContent: s.url }),
+      Object.assign(document.createElement('span'), { className: 'suggestion-url', textContent: s.type === 'search' ? '' : s.url }),
     );
     const tag = Object.assign(document.createElement('span'), { className: 'suggestion-tag', textContent: tags[s.type](s) });
-    row.append(img, text, tag);
+    const glass = Object.assign(document.createElement('span'), { className: 'suggestion-glass', textContent: '🔍' });
+    row.append(s.type === 'search' ? glass : img, text, tag);
     return row;
   }));
 });
