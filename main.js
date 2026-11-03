@@ -1044,8 +1044,12 @@ function pageMenu(tab, p) {
   } else if (p.selectionText) items.push({ role: 'copy', label: t('copy') }, separator);
   if (p.selectionText.trim()) {
     const text = p.selectionText.trim();
+    const short = text.length > 24 ? `${text.slice(0, 24)}…` : text;
     items.push({
-      label: t('translateText', { text: text.length > 24 ? `${text.slice(0, 24)}…` : text }),
+      label: t('searchText', { text: short }),
+      click: () => showTab(makeTab(tab.serviceId, `https://www.google.com/search?q=${encodeURIComponent(text)}`)),
+    }, {
+      label: t('translateText', { text: short }),
       click: () => showTab(makeTab(tab.serviceId, translateTextUrl(text))),
     }, separator);
   }
