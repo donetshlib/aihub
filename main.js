@@ -774,13 +774,16 @@ function wireSession(ses) {
     const saved = permissions[`${origin} ${permission === 'media' ? details.mediaType : permission}`];
     return saved ?? (ALWAYS_ALLOWED.has(permission) || permission === 'media');
   });
-  ses.setPermissionRequestHandler((_, permission, callback, details) => askPermission(permission, details).then(callback));
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => askPermission(permission, details, wc && tabOf(wc)).then(callback));
 }
 
 // Asks like Chrome does; "remember" stores the answer per site and per kind (audio, video, ...).
-async function askPermission(permission, details) {
+async function askPermission(permission, details, tab) {
   if (ALWAYS_ALLOWED.has(permission)) return true;
-  if (permission === 'openExternal' && DANGEROUS_SCHEME.test(URL.parse(details.externalURL ?? '')?.protocol ?? 'file:')) return false;
+  if (permission === 'openExternal') {
+    if (DANGEROUS_SCHEME.test(URL.parse(details.externalURL ?? '')?.protocol ?? 'file:')) return false;
+    if (tab && !(Date.now() - (tab.gestureAt ?? 0) < 5000)) return false; // no click: not asked at all
+  }
   let origin;
   try {
     origin = new URL(details.requestingUrl).origin;
