@@ -42,6 +42,9 @@ const DEFAULT_SETTINGS = {
 const GLOBAL_HOTKEY = 'Ctrl+Shift+Space';
 // ms-msdt: (Follina), search-ms:, ms-officecmd: and the like have been used to run code on Windows.
 const DANGEROUS_SCHEME = /^(file|ms-[\w.-]+|search-ms|search|shell|mk|its|res|hcp|javascript|vbscript|data):$/i;
+// Extension permissions worth a warning: reading cookies, traffic, history, other programs.
+const RISKY_PERMISSIONS = new Set(['cookies', 'webRequest', 'webRequestBlocking', 'history', 'tabs', 'debugger', 'nativeMessaging',
+  'downloads', 'management', 'proxy', 'privacy', 'clipboardRead', 'scripting', 'webNavigation']);
 const USER_INPUT = new Set(['mouseDown', 'rawKeyDown', 'keyDown', 'touchStart']);
 // Like Chrome's user activation: a click or key press counts for 5 s. Kept per webContents, so
 // popups follow the same rules as tabs.
@@ -167,8 +170,8 @@ function ensureView(tab) {
     return { action: 'deny' };
   });
 
-  wc.on('did-create-window', wirePopup);
-  wc.on('will-navigate', (event, url) => url.startsWith('file:') && event.preventDefault());
+  wc.on('did-create-window', (popup) => wirePopup(popup, wc));
+  blockScriptFiles(wc);
 
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
@@ -247,7 +250,8 @@ function ensureView(tab) {
   return view;
 }
 
-const isErrorPage = (wc) => wc.getURL().startsWith('file:');
+const ERROR_URL = pathToFileURL(ERROR_PAGE).href;
+const isErrorPage = (wc) => wc.getURL().startsWith(ERROR_URL);
 
 const canOpen = (url) => /^(https?|chrome-extension):/i.test(url ?? '');
 
@@ -258,14 +262,23 @@ function openPage(wc, url) {
 
 // Reloading the error page would only show it again, so the failed address is loaded instead.
 // Sign-in popups have no address bar: the title shows the site they are on, also for popups they open.
-function wirePopup(popup) {
+// A file dropped on a page opens like in Chrome, but only PDFs, pictures, video, audio and text:
+// a file: page with scripts could read other local files.
+const SAFE_FILE = /\.(pdf|png|jpe?g|gif|webp|bmp|avif|mp4|webm|mkv|mov|mp3|ogg|wav|flac|m4a|txt|log|json|csv|md)$/i;
+const blockScriptFiles = (wc) =>
+  wc.on('will-navigate', (event, url) => url.startsWith('file:') && !SAFE_FILE.test(new URL(url).pathname) && event.preventDefault());
+
+function wirePopup(popup, opener) {
   const showOrigin = () => {
-    const origin = URL.parse(popup.webContents.getURL())?.origin;
-    popup.setTitle(origin && origin !== 'null' ? origin : ''); // about:blank has the origin "null"
+    // about:blank (origin "null") is filled in by the page that opened it: that site is named.
+    const origin = [popup.webContents.getURL(), opener?.isDestroyed() ? '' : opener?.getURL()]
+      .map((url) => URL.parse(url ?? '')?.origin).find((o) => o && o !== 'null');
+    popup.setTitle(origin ?? '');
   };
+  blockScriptFiles(popup.webContents);
   popup.on('page-title-updated', (event) => event.preventDefault());
   popup.webContents.on('did-navigate', showOrigin);
-  popup.webContents.on('did-create-window', wirePopup);
+  popup.webContents.on('did-create-window', (child) => wirePopup(child, popup.webContents));
   trackGestures(popup.webContents);
   popup.webContents.setWindowOpenHandler(({ url }) => {
     if (!hadGesture(popup.webContents) || (!isWeb(url) && url !== 'about:blank')) return { action: 'deny' };
@@ -474,7 +487,7 @@ function showSuggestions() {
   ui.send('suggestions', suggestions.length);
   if (!suggestions.length) return suggestView?.setVisible(false);
   if (!suggestView) {
-    suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false } });
+    suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true } });
     suggestView.setBackgroundColor('#00000000');
     lockPage(suggestView.webContents);
     suggestView.webContents.loadFile(path.join(__dirname, 'ui', 'suggest.html'));
@@ -729,6 +742,7 @@ function wireSession(ses) {
       });
       if (asked !== 0) return event.preventDefault();
     }
+    if (wc) gestures.delete(wc); // the next file after the same click is asked about
     const target = settings.askDownload ? null : freePath(downloadDir(), item.getFilename());
     if (target) item.setSavePath(target);
     const download = {
@@ -966,13 +980,18 @@ function wireExtensions(ses) {
         ...(manifest.permissions ?? []).filter((p) => p.includes('://') || p === '<all_urls>'), // Manifest V2
         ...(manifest.content_scripts ?? []).flatMap((c) => c.matches ?? []),
       ])];
+      const risky = (manifest.permissions ?? []).filter((p) => RISKY_PERMISSIONS.has(p));
       const { response } = await dialog.showMessageBox(win, {
         type: 'question',
         buttons: [t('install'), t('cancel')],
         defaultId: 1,
         cancelId: 1,
         message: t('installExtension', { name: localizedName }),
-        detail: [sites.length ? t('extensionSites', { sites: sites.slice(0, 8).join('\n') + (sites.length > 8 ? '\n…' : '') }) : '', t('extensionsHint')].filter(Boolean).join('\n\n'),
+        detail: [
+          sites.length ? t('extensionSites', { sites: sites.slice(0, 8).join('\n') + (sites.length > 8 ? '\n…' : '') }) : '',
+          risky.length ? t('extensionPermissions', { list: risky.join(', ') }) : '',
+          t('extensionsHint'),
+        ].filter(Boolean).join('\n\n'),
       });
       return { action: response === 0 ? 'allow' : 'deny' };
     },

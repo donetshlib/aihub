@@ -35,7 +35,7 @@
       document.getElementById('hint').textContent = t('errorHint');
       document.getElementById('detail').textContent = `${query.get('code')} · ${url}`;
       // replace(): the error page itself should not stay in the back history.
-      const retry = () => location.replace(url);
+      const retry = () => /^https?:/i.test(url) && location.replace(url);
       document.getElementById('retry').textContent = t('retry');
       document.getElementById('retry').onclick = retry;
       addEventListener('online', retry);
