@@ -152,12 +152,7 @@ function ensureView(tab) {
     return { action: 'deny' };
   });
 
-  wc.on('did-create-window', (popup) => {
-    const showOrigin = () => popup.setTitle(URL.parse(popup.webContents.getURL())?.origin ?? '');
-    popup.on('page-title-updated', (event) => event.preventDefault());
-    popup.webContents.on('did-navigate', showOrigin);
-    showOrigin();
-  });
+  wc.on('did-create-window', wirePopup);
 
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
@@ -246,10 +241,22 @@ function openPage(wc, url) {
 }
 
 // Reloading the error page would only show it again, so the failed address is loaded instead.
+// Sign-in popups have no address bar: the title shows the site they are on, also for popups they open.
+function wirePopup(popup) {
+  const showOrigin = () => {
+    const origin = URL.parse(popup.webContents.getURL())?.origin;
+    popup.setTitle(origin && origin !== 'null' ? origin : ''); // about:blank has the origin "null"
+  };
+  popup.on('page-title-updated', (event) => event.preventDefault());
+  popup.webContents.on('did-navigate', showOrigin);
+  popup.webContents.on('did-create-window', wirePopup);
+  showOrigin();
+}
+
 function reload(tab) {
   const wc = tab?.view?.webContents;
   if (!wc) return tab && showTab(tab);
-  if (isErrorPage(wc) && tab.url) wc.loadURL(tab.url);
+  if (isErrorPage(wc) && tab.url) openPage(wc, tab.url);
   else wc.reload();
 }
 
@@ -511,6 +518,7 @@ function layout() {
     fullscreenTab = null;
     win.setFullScreen(false);
   }
+  if (!fullscreenTab) hideFullscreenNotice();
   panes.forEach((id, i) => {
     const tab = tabs.get(id);
     const view = ensureView(tab);
@@ -540,11 +548,15 @@ function showFullscreenNotice() {
   notice.webContents.once('did-finish-load', () =>
     notice.webContents.executeJavaScript(`document.querySelector('div').textContent = ${JSON.stringify(t('fullscreenEsc'))}`));
   render();
-  setTimeout(() => {
-    fullscreenNotice = null;
-    if (!win.isDestroyed()) win.contentView.removeChildView(notice);
-    notice.webContents.close();
-  }, 3500);
+  setTimeout(hideFullscreenNotice, 3500);
+}
+
+function hideFullscreenNotice() {
+  const notice = fullscreenNotice;
+  if (!notice) return;
+  fullscreenNotice = null;
+  if (!win.isDestroyed()) win.contentView.removeChildView(notice);
+  notice.webContents.close();
 }
 
 /* ---------- Rendering ---------- */
@@ -914,14 +926,19 @@ function wireExtensions(ses) {
     session: ses,
     extensionsPath: extensionsDir(),
     autoUpdate: chromeExtensions.size === 1, // one profile checks for updates, the mirroring does the rest
-    beforeInstall: async ({ localizedName }) => {
+    beforeInstall: async ({ localizedName, manifest }) => {
+      const sites = [...new Set([
+        ...(manifest.host_permissions ?? []),
+        ...(manifest.permissions ?? []).filter((p) => p.includes('://') || p === '<all_urls>'), // Manifest V2
+        ...(manifest.content_scripts ?? []).flatMap((c) => c.matches ?? []),
+      ])];
       const { response } = await dialog.showMessageBox(win, {
         type: 'question',
         buttons: [t('install'), t('cancel')],
         defaultId: 0,
         cancelId: 1,
         message: t('installExtension', { name: localizedName }),
-        detail: t('extensionsHint'),
+        detail: [sites.length ? t('extensionSites', { sites: sites.slice(0, 8).join('\n') + (sites.length > 8 ? '\n…' : '') }) : '', t('extensionsHint')].filter(Boolean).join('\n\n'),
       });
       return { action: response === 0 ? 'allow' : 'deny' };
     },
