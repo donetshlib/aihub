@@ -79,6 +79,7 @@ const extensionIcons = new Map(); // extension path -> NativeImage
 let blocker = null; // ad blocker, loaded once at startup
 const adblockPreloads = new Map(); // session -> id of the blocker's preload
 let fullscreenTab = null; // a page in HTML fullscreen (a video player) covers the whole screen
+let fullscreenNotice = null; // "press Esc" over it for the first seconds
 let selectedContents = null; // the tab the extensions were last told is active
 
 /* ---------- Files ---------- */
@@ -151,6 +152,13 @@ function ensureView(tab) {
     return { action: 'deny' };
   });
 
+  wc.on('did-create-window', (popup) => {
+    const showOrigin = () => popup.setTitle(URL.parse(popup.webContents.getURL())?.origin ?? '');
+    popup.on('page-title-updated', (event) => event.preventDefault());
+    popup.webContents.on('did-navigate', showOrigin);
+    showOrigin();
+  });
+
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
     if (wc.getURL().startsWith(NEW_TAB_URL)) tab.url = '';
@@ -190,6 +198,7 @@ function ensureView(tab) {
   wc.on('found-in-page', (_, result) => ui.send('find-result', result));
   wc.on('enter-html-full-screen', () => {
     fullscreenTab = tab;
+    showFullscreenNotice();
     win.setFullScreen(true);
     render();
   });
@@ -229,8 +238,10 @@ function ensureView(tab) {
 
 const isErrorPage = (wc) => wc.getURL().startsWith('file:');
 
+const canOpen = (url) => /^(https?|chrome-extension):/i.test(url ?? '');
+
 function openPage(wc, url) {
-  if (url) wc.loadURL(url);
+  if (canOpen(url)) wc.loadURL(url);
   else wc.loadFile(NEW_TAB, { query: { theme: settings.theme, title: t('newTab') } });
 }
 
@@ -436,6 +447,7 @@ function showSuggestions() {
   if (!suggestView) {
     suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false } });
     suggestView.setBackgroundColor('#00000000');
+    lockPage(suggestView.webContents);
     suggestView.webContents.loadFile(path.join(__dirname, 'ui', 'suggest.html'));
     suggestView.webContents.on('did-finish-load', sendSuggestions);
   }
@@ -506,10 +518,33 @@ function layout() {
     view.setBounds(full ? { x: 0, y: 0, width, height } : rects[i]);
     view.setVisible(!fullscreenTab || full);
     if (full) win.contentView.addChildView(view); // above the other panes and the suggestions
+    if (full && fullscreenNotice) {
+      win.contentView.addChildView(fullscreenNotice);
+      fullscreenNotice.setBounds({ x: Math.round(width / 2 - 220), y: 24, width: 440, height: 48 });
+    }
     tab.shown = true;
     if (win.isFocused()) tab.unread = false;
   });
   return rects;
+}
+
+function showFullscreenNotice() {
+  if (fullscreenNotice) return;
+  const notice = new WebContentsView();
+  fullscreenNotice = notice;
+  notice.setBackgroundColor('#00000000');
+  lockPage(notice.webContents);
+  const html = `<body style="margin:0;display:flex;justify-content:center;font:15px system-ui,sans-serif">
+    <div style="padding:12px 20px;border-radius:24px;background:rgba(32,32,32,.9);color:#fff"></div></body>`;
+  notice.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  notice.webContents.once('did-finish-load', () =>
+    notice.webContents.executeJavaScript(`document.querySelector('div').textContent = ${JSON.stringify(t('fullscreenEsc'))}`));
+  render();
+  setTimeout(() => {
+    fullscreenNotice = null;
+    if (!win.isDestroyed()) win.contentView.removeChildView(notice);
+    notice.webContents.close();
+  }, 3500);
 }
 
 /* ---------- Rendering ---------- */
@@ -638,6 +673,12 @@ async function signOut(ids, message) {
 
 /* ---------- Sessions: downloads and request tracking ---------- */
 
+// The app's own pages hold window.hub: a link or file dropped on them must not replace them.
+function lockPage(wc) {
+  wc.on('will-navigate', (event) => event.preventDefault());
+  wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+}
+
 function wireSession(ses) {
   if (wiredSessions.has(ses)) return;
   wiredSessions.add(ses);
@@ -725,11 +766,10 @@ async function askPermission(permission, details) {
   const { response, checkboxChecked } = await dialog.showMessageBox(win, {
     type: 'question',
     buttons: [t('allow'), t('deny')],
-    defaultId: 0,
+    defaultId: 1,
     cancelId: 1,
     message: t('permissionAsk', { site: new URL(origin).host, what }),
-    checkboxLabel: t('remember'),
-    checkboxChecked: true,
+    ...(permission === 'openExternal' ? {} : { checkboxLabel: t('remember'), checkboxChecked: false }),
   });
   const allowed = response === 0;
   if (checkboxChecked) {
@@ -851,7 +891,7 @@ function wireExtensions(ses) {
         webPreferences: { session: ses },
       });
       const url = [details.url ?? []].flat()[0];
-      if (url) popup.loadURL(url);
+      if (canOpen(url)) popup.loadURL(url);
       return popup;
     },
   }));
@@ -1537,6 +1577,7 @@ function start() {
   handleExtensionIcons();
   if (settings.maximized) win.maximize();
   ui = win.webContents;
+  lockPage(ui);
   ui.on('before-input-event', onKey);
   win.on('page-title-updated', (event) => event.preventDefault());
   for (const event of ['resize', 'maximize', 'unmaximize', 'focus']) win.on(event, render);
