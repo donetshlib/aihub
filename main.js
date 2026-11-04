@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS = {
   darkSites: false, globalHotkey: false,
 };
 const GLOBAL_HOTKEY = 'Ctrl+Shift+Space';
+// ms-msdt: (Follina), search-ms:, ms-officecmd: and the like have been used to run code on Windows.
+const DANGEROUS_SCHEME = /^(file|ms-[\w.-]+|search-ms|search|shell|mk|its|res|hcp|javascript|vbscript|data):$/i;
+const USER_INPUT = new Set(['mouseDown', 'rawKeyDown', 'keyDown', 'touchStart']);
 const THEMES = { dark: 'dark', light: 'light', original: 'dark' }; // app theme -> what sites see
 // Granted without asking: pages need them for plain things like a "copy" button or fullscreen video.
 const ALWAYS_ALLOWED = new Set(['clipboard-sanitized-write', 'fullscreen', 'storage-access', 'top-level-storage-access']);
@@ -123,6 +126,9 @@ const topServices = () => services.filter((s) => !s.parent);
 const t = (key, vars) => translate(settings.lang, key, vars);
 const current = () => tabs.get(panes[focused]);
 const currentContents = () => current()?.view?.webContents;
+// Sites pick their icon address; the app's own pages are file:, where a file://host/share icon
+// would make Windows connect to that host and hand it the user's NTLM hash.
+const safeIcon = (url) => (/^(https?|data):/i.test(url ?? '') ? url : null);
 const favicon = (url) => (url ? `https://www.google.com/s2/favicons?domain=${new URL(url).hostname}&sz=64` : null);
 const openExternal = (url) => /^https?:/i.test(url) && shell.openExternal(url);
 const confirm = (message) =>
@@ -143,7 +149,13 @@ function ensureView(tab) {
   wireSession(wc.session);
   chromeExtensions.get(wc.session).addTab(wc, win);
 
+  wc.on('input-event', (_, input) => {
+    if (USER_INPUT.has(input.type)) tab.gestureAt = Date.now();
+  });
   wc.setWindowOpenHandler(({ url, disposition }) => {
+    if (!(Date.now() - (tab.gestureAt ?? 0) < 5000)) return { action: 'deny' }; // no click: an ad
+    if (!isWeb(url) && url !== 'about:blank') return { action: 'deny' };
+    tab.gestureAt = 0;
     // window.open with a size is a real popup (OAuth sign-in): it needs window.opener to work.
     if (disposition === 'new-window') return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true } };
     const opened = makeTab(tab.serviceId, url);
@@ -153,6 +165,7 @@ function ensureView(tab) {
   });
 
   wc.on('did-create-window', wirePopup);
+  wc.on('will-navigate', (event, url) => url.startsWith('file:') && event.preventDefault());
 
   const onNavigate = () => {
     // On the error page the tab keeps the address that failed.
@@ -178,7 +191,7 @@ function ensureView(tab) {
     render();
   });
   wc.on('page-favicon-updated', (_, icons) => {
-    tab.favicon = icons[0] ?? null;
+    tab.favicon = safeIcon(icons[0]);
     updateHistory(tab, { favicon: tab.favicon });
     render();
   });
@@ -699,7 +712,15 @@ function wireSession(ses) {
   if (settings.adblock) setAdblock(ses, true);
 
   // Without setSavePath Electron shows the regular "Save as" dialog.
-  ses.on('will-download', (_, item) => {
+  ses.on('will-download', (event, item, wc) => {
+    const tab = wc && tabOf(wc);
+    if (tab && !(Date.now() - (tab.gestureAt ?? 0) < 5000)) {
+      const asked = dialog.showMessageBoxSync(win, {
+        type: 'question', buttons: [t('allow'), t('deny')], defaultId: 1, cancelId: 1,
+        message: t('downloadAsk', { site: URL.parse(wc.getURL())?.host ?? '', name: item.getFilename() }),
+      });
+      if (asked !== 0) return event.preventDefault();
+    }
     const target = settings.askDownload ? null : freePath(downloadDir(), item.getFilename());
     if (target) item.setSavePath(target);
     const download = {
@@ -759,6 +780,7 @@ function wireSession(ses) {
 // Asks like Chrome does; "remember" stores the answer per site and per kind (audio, video, ...).
 async function askPermission(permission, details) {
   if (ALWAYS_ALLOWED.has(permission)) return true;
+  if (permission === 'openExternal' && DANGEROUS_SCHEME.test(URL.parse(details.externalURL ?? '')?.protocol ?? 'file:')) return false;
   let origin;
   try {
     origin = new URL(details.requestingUrl).origin;
@@ -903,6 +925,7 @@ function wireExtensions(ses) {
         webPreferences: { session: ses },
       });
       const url = [details.url ?? []].flat()[0];
+      wirePopup(popup);
       if (canOpen(url)) popup.loadURL(url);
       return popup;
     },
@@ -935,7 +958,7 @@ function wireExtensions(ses) {
       const { response } = await dialog.showMessageBox(win, {
         type: 'question',
         buttons: [t('install'), t('cancel')],
-        defaultId: 0,
+        defaultId: 1,
         cancelId: 1,
         message: t('installExtension', { name: localizedName }),
         detail: [sites.length ? t('extensionSites', { sites: sites.slice(0, 8).join('\n') + (sites.length > 8 ? '\n…' : '') }) : '', t('extensionsHint')].filter(Boolean).join('\n\n'),
@@ -1167,7 +1190,7 @@ function pageMenu(tab, p) {
   const fromExtensions = chromeExtensions.get(wc.session)?.getContextMenuItems(wc, p) ?? [];
   const items = p.dictionarySuggestions.map((word) => ({ label: word, click: () => wc.replaceMisspelling(word) }));
   if (p.misspelledWord) items.push({ label: t('addToDictionary'), click: () => wc.session.addWordToSpellCheckerDictionary(p.misspelledWord) }, separator);
-  if (p.linkURL) {
+  if (isWeb(p.linkURL)) {
     items.push(
       { label: t('openLinkNewTab'), click: () => showTab(makeTab(tab.serviceId, p.linkURL)) },
       { label: t('openLinkBeside'), enabled: panes.length < MAX_PANES, click: () => openBeside(makeTab(tab.serviceId, p.linkURL)) },
@@ -1396,7 +1419,7 @@ const actions = {
   },
   signOutAll: () => signOut(topServices().map((s) => s.id), t('confirmSignOutAll')),
   setting: ({ key, value }) => {
-    if (key === 'theme' && THEMES[value]) {
+    if (key === 'theme' && Object.hasOwn(THEMES, value)) {
       settings.theme = value;
       nativeTheme.themeSource = THEMES[value];
     } else if (key === 'unloadMinutes' && Number(value) >= 0) settings.unloadMinutes = Number(value);
@@ -1408,7 +1431,7 @@ const actions = {
     else if (key === 'globalHotkey' && typeof value === 'boolean') settings.globalHotkey = setGlobalHotkey(value) && value;
     // Chromium's own darkening of light pages: a switch read at startup, so it waits for a restart.
     else if (key === 'darkSites' && typeof value === 'boolean') settings.darkSites = value;
-    else if (key === 'lang' && LANGS[value]) {
+    else if (key === 'lang' && Object.hasOwn(LANGS, value)) {
       settings.lang = value;
       wiredSessions.forEach(setSiteLanguage);
     }
@@ -1579,6 +1602,7 @@ function start() {
   bookmarks = load('bookmarks.json', []);
   if (!Array.isArray(history)) history = [];
   if (!Array.isArray(bookmarks)) bookmarks = [];
+  for (const item of [...history, ...bookmarks]) item.favicon = safeIcon(item.favicon);
   nativeTheme.themeSource = THEMES[settings.theme] ?? 'dark';
 
   const bounds = settings.bounds && onScreen(settings.bounds) ? settings.bounds : { width: 1280, height: 820 };
@@ -1615,7 +1639,7 @@ function start() {
   const saved = load('session.json', { tabs: [], active: -1 });
   const restored = (Array.isArray(saved.tabs) ? saved.tabs : []).map((t) => {
     if (!serviceById(t.serviceId) || typeof t.url !== 'string') return null;
-    const tab = makeTab(t.serviceId, t.url, t.title, t.favicon);
+    const tab = makeTab(t.serviceId, t.url, t.title, safeIcon(t.favicon));
     tab.pinned = !!t.pinned;
     return tab;
   });
