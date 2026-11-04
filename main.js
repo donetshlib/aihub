@@ -43,6 +43,11 @@ const GLOBAL_HOTKEY = 'Ctrl+Shift+Space';
 // ms-msdt: (Follina), search-ms:, ms-officecmd: and the like have been used to run code on Windows.
 const DANGEROUS_SCHEME = /^(file|ms-[\w.-]+|search-ms|search|shell|mk|its|res|hcp|javascript|vbscript|data):$/i;
 const USER_INPUT = new Set(['mouseDown', 'rawKeyDown', 'keyDown', 'touchStart']);
+// Like Chrome's user activation: a click or key press counts for 5 s. Kept per webContents, so
+// popups follow the same rules as tabs.
+const gestures = new WeakMap(); // webContents -> time of the last click or key press in it
+const trackGestures = (wc) => wc.on('input-event', (_, input) => USER_INPUT.has(input.type) && gestures.set(wc, Date.now()));
+const hadGesture = (wc) => Date.now() - (gestures.get(wc) ?? 0) < 5000;
 const THEMES = { dark: 'dark', light: 'light', original: 'dark' }; // app theme -> what sites see
 // Granted without asking: pages need them for plain things like a "copy" button or fullscreen video.
 const ALWAYS_ALLOWED = new Set(['clipboard-sanitized-write', 'fullscreen', 'storage-access', 'top-level-storage-access']);
@@ -149,13 +154,11 @@ function ensureView(tab) {
   wireSession(wc.session);
   chromeExtensions.get(wc.session).addTab(wc, win);
 
-  wc.on('input-event', (_, input) => {
-    if (USER_INPUT.has(input.type)) tab.gestureAt = Date.now();
-  });
+  trackGestures(wc);
   wc.setWindowOpenHandler(({ url, disposition }) => {
-    if (!(Date.now() - (tab.gestureAt ?? 0) < 5000)) return { action: 'deny' }; // no click: an ad
+    if (!hadGesture(wc)) return { action: 'deny' }; // no click: an ad
     if (!isWeb(url) && url !== 'about:blank') return { action: 'deny' };
-    tab.gestureAt = 0;
+    gestures.delete(wc); // one window per click
     // window.open with a size is a real popup (OAuth sign-in): it needs window.opener to work.
     if (disposition === 'new-window') return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true } };
     const opened = makeTab(tab.serviceId, url);
@@ -263,6 +266,12 @@ function wirePopup(popup) {
   popup.on('page-title-updated', (event) => event.preventDefault());
   popup.webContents.on('did-navigate', showOrigin);
   popup.webContents.on('did-create-window', wirePopup);
+  trackGestures(popup.webContents);
+  popup.webContents.setWindowOpenHandler(({ url }) => {
+    if (!hadGesture(popup.webContents) || (!isWeb(url) && url !== 'about:blank')) return { action: 'deny' };
+    gestures.delete(popup.webContents);
+    return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true } };
+  });
   showOrigin();
 }
 
@@ -713,8 +722,7 @@ function wireSession(ses) {
 
   // Without setSavePath Electron shows the regular "Save as" dialog.
   ses.on('will-download', (event, item, wc) => {
-    const tab = wc && tabOf(wc);
-    if (tab && !(Date.now() - (tab.gestureAt ?? 0) < 5000)) {
+    if (wc && !hadGesture(wc)) {
       const asked = dialog.showMessageBoxSync(win, {
         type: 'question', buttons: [t('allow'), t('deny')], defaultId: 1, cancelId: 1,
         message: t('downloadAsk', { site: URL.parse(wc.getURL())?.host ?? '', name: item.getFilename() }),
@@ -774,15 +782,15 @@ function wireSession(ses) {
     const saved = permissions[`${origin} ${permission === 'media' ? details.mediaType : permission}`];
     return saved ?? (ALWAYS_ALLOWED.has(permission) || permission === 'media');
   });
-  ses.setPermissionRequestHandler((wc, permission, callback, details) => askPermission(permission, details, wc && tabOf(wc)).then(callback));
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => askPermission(permission, details, wc).then(callback));
 }
 
 // Asks like Chrome does; "remember" stores the answer per site and per kind (audio, video, ...).
-async function askPermission(permission, details, tab) {
+async function askPermission(permission, details, wc) {
   if (ALWAYS_ALLOWED.has(permission)) return true;
   if (permission === 'openExternal') {
     if (DANGEROUS_SCHEME.test(URL.parse(details.externalURL ?? '')?.protocol ?? 'file:')) return false;
-    if (tab && !(Date.now() - (tab.gestureAt ?? 0) < 5000)) return false; // no click: not asked at all
+    if (wc && !hadGesture(wc)) return false; // no click: not asked at all
   }
   let origin;
   try {
