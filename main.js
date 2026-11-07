@@ -486,17 +486,22 @@ function showSuggestions() {
   const rect = suggestRect;
   ui.send('suggestions', suggestions.length);
   if (!suggestions.length) return suggestView?.setVisible(false);
-  if (!suggestView) {
-    suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true } });
-    suggestView.setBackgroundColor('#00000000');
-    lockPage(suggestView.webContents);
-    suggestView.webContents.loadFile(path.join(__dirname, 'ui', 'suggest.html'));
-    suggestView.webContents.on('did-finish-load', sendSuggestions);
-  }
   win.contentView.addChildView(suggestView); // again: brings it above tab views made since
   suggestView.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: suggestions.length * 44 + 14 });
   suggestView.setVisible(true);
   sendSuggestions();
+}
+
+// Made at startup: a view takes the focus when its page loads, which would interrupt typing in the address bar.
+function createSuggestView() {
+  suggestView = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true } });
+  suggestView.setBackgroundColor('#00000000');
+  suggestView.setVisible(false);
+  lockPage(suggestView.webContents);
+  suggestView.webContents.loadFile(path.join(__dirname, 'ui', 'suggest.html'));
+  // Rows are picked on mousedown; the focus belongs to the main window.
+  suggestView.webContents.on('focus', () => ui.focus());
+  win.contentView.addChildView(suggestView);
 }
 
 function sendSuggestions() {
@@ -1070,8 +1075,8 @@ function onKey(event, input) {
   else if (ctrl && code === 'KeyT') newTab();
   else if (ctrl && code === 'KeyW') current() && closeTab(current().id);
   else if (ctrl && code === 'Tab') cycleTab(input.shift ? -1 : 1);
-  else if (ctrl && code === 'KeyF') ui.send('cmd', 'find');
-  else if (ctrl && (code === 'KeyL' || code === 'KeyK' || code === 'KeyE')) ui.send('cmd', 'address');
+  else if (ctrl && code === 'KeyF') ui.focus(), ui.send('cmd', 'find');
+  else if (ctrl && (code === 'KeyL' || code === 'KeyK' || code === 'KeyE')) ui.focus(), ui.send('cmd', 'address');
   else if ((ctrl && code === 'KeyR') || code === 'F5') reload(current());
   else if (input.alt && code === 'ArrowLeft') history?.goBack();
   else if (input.alt && code === 'ArrowRight') history?.goForward();
@@ -1649,6 +1654,7 @@ function start() {
   if (settings.maximized) win.maximize();
   ui = win.webContents;
   lockPage(ui);
+  createSuggestView();
   ui.on('before-input-event', onKey);
   win.on('page-title-updated', (event) => event.preventDefault());
   for (const event of ['resize', 'maximize', 'unmaximize', 'focus']) win.on(event, render);
