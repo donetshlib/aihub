@@ -1,7 +1,7 @@
 {
   "name": "ai-hub",
   "productName": "AI Hub",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "description": "AI chats in one window: a sidebar of services, tabs, split view",
   "author": "AI Hub",
   "license": "PolyForm-Noncommercial-1.0.0",

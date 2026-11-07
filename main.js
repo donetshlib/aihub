@@ -2,7 +2,7 @@
 // The window's own page (ui/) draws the sidebar, tab strip, toolbar and side panel; every tab
 // is a WebContentsView laid over the content area. All tab state lives here, the UI only
 // renders the snapshot it is sent.
-const { app, BrowserWindow, WebContentsView, Menu, globalShortcut, Notification, dialog, nativeImage, ipcMain, nativeTheme, screen, session, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, globalShortcut, Notification, dialog, nativeImage, ipcMain, nativeTheme, net, screen, session, shell, clipboard } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const fs = require('node:fs');
@@ -87,6 +87,9 @@ const inflight = new Map(); // webContents id -> Map of request id -> start time
 const wiredSessions = new Set();
 const chromeExtensions = new Map(); // session -> ElectronChromeExtensions
 const extensionIcons = new Map(); // extension path -> NativeImage
+// Chromium's network stack: Node's fetch (undici) crashes the app now and then when a connection
+// closes during parallel downloads ("assert(!this.paused)"), and it ignores the system proxy.
+const webFetch = (...args) => net.fetch(...args);
 let blocker = null; // ad blocker, loaded once at startup
 const adblockPreloads = new Map(); // session -> id of the blocker's preload
 let fullscreenTab = null; // a page in HTML fullscreen (a video player) covers the whole screen
@@ -470,7 +473,7 @@ function suggest(arg) {
 
 async function searchGoogle(text) {
   try {
-    const response = await fetch(`https://suggestqueries.google.com/complete/search?client=chrome&ie=utf-8&oe=utf-8&hl=${settings.lang}&q=${encodeURIComponent(text)}`);
+    const response = await webFetch(`https://suggestqueries.google.com/complete/search?client=chrome&ie=utf-8&oe=utf-8&hl=${settings.lang}&q=${encodeURIComponent(text)}`);
     const [, list] = await response.json();
     // Not when the text changed meanwhile or a row is already picked with the arrows.
     if (text !== suggestText || selectedSuggestion >= 0) return;
@@ -1142,7 +1145,7 @@ async function translatePage(tab) {
   }
   const done = {};
   await Promise.all(batches.map(async (batch) => {
-    const response = await fetch(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=${settings.lang}`, {
+    const response = await webFetch(`https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=${settings.lang}`, {
       method: 'POST',
       body: new URLSearchParams(batch.map((q) => ['q', q])),
     });
@@ -1614,9 +1617,9 @@ function start() {
   const cache = path.join(app.getPath('userData'), 'adblock.bin');
   const lists = [...adsAndTrackingLists.map((url) => url.replace(/.*\/ublock-origin\//,'https://ublockorigin.github.io/uAssets/filters/')),
     'https://filters.adtidy.org/extension/ublock/filters/2.txt'];
-  const cached = () => ElectronBlocker.fromLists(fetch, lists, {}, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
+  const cached = () => ElectronBlocker.fromLists(webFetch, lists, {}, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
   const age = Date.now() - (fs.statSync(cache, { throwIfNoEntry: false })?.mtimeMs ?? 0);
-  (age < 86400_000 ? cached() : ElectronBlocker.fromLists(fetch, lists)
+  (age < 86400_000 ? cached() : ElectronBlocker.fromLists(webFetch, lists)
     .then(async (fresh) => (await fs.promises.writeFile(cache, fresh.serialize()), fresh))
     .catch(cached))
     .then((loaded) => {
