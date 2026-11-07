@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const { ElectronChromeExtensions } = require('electron-chrome-extensions');
 const { installChromeWebStore, uninstallExtension } = require('electron-chrome-web-store');
 const { autoUpdater } = require('electron-updater');
-const { ElectronBlocker } = require('@ghostery/adblocker-electron');
+const { ElectronBlocker, adsAndTrackingLists } = require('@ghostery/adblocker-electron');
 const { LANGS, translate } = require('./ui/i18n.js');
 
 // Must match the sizes in ui/style.css.
@@ -1608,11 +1608,25 @@ function start() {
     check();
     setInterval(check, 6 * 3600_000);
   }
-  // Ghostery's ad and tracker lists, cached; sessions wired before it loads get it here.
+  // Ghostery's ad and tracker lists, uBlock's taken straight from uBlock (Ghostery's copies lag behind,
+  // and YouTube changes often), plus AdGuard Base in uBlock syntax. Fetched again when the cache is a
+  // day old, the cache is the fallback offline. Sessions wired before it loads get it here.
   const cache = path.join(app.getPath('userData'), 'adblock.bin');
-  ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile })
+  const lists = [...adsAndTrackingLists.map((url) => url.replace(/.*\/ublock-origin\//,'https://ublockorigin.github.io/uAssets/filters/')),
+    'https://filters.adtidy.org/extension/ublock/filters/2.txt'];
+  const cached = () => ElectronBlocker.fromLists(fetch, lists, {}, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
+  const age = Date.now() - (fs.statSync(cache, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+  (age < 86400_000 ? cached() : ElectronBlocker.fromLists(fetch, lists)
+    .then(async (fresh) => (await fs.promises.writeFile(cache, fresh.serialize()), fresh))
+    .catch(cached))
     .then((loaded) => {
       blocker = loaded;
+      // The lists overlap: a scriptlet run twice breaks YouTube.
+      const getCosmetics = blocker.getCosmeticsFilters.bind(blocker);
+      blocker.getCosmeticsFilters = (...args) => {
+        const result = getCosmetics(...args);
+        return { ...result, scripts: [...new Set(result.scripts)] };
+      };
       // The library runs every frame's scripts in the main frame: each iframe injects them there
       // again, and the doubled scriptlets break YouTube. Run them in the frame that asked.
       ipcMain.handle('@ghostery/adblocker/inject-cosmetic-filters', (event, url, msg) => blocker.onInjectCosmeticFilters({
