@@ -117,6 +117,9 @@ function save(name, data) {
   fs.renameSync(`${file}.tmp`, file);
 }
 
+// Finished downloads survive a restart, like in Chrome; running ones are cancelled on quit.
+const saveDownloads = () => save('downloads.json', downloads.filter((d) => d.state !== 'progressing').slice(0, 200));
+
 function saveSession() {
   const list = [...tabs.values()];
   save('session.json', {
@@ -771,9 +774,11 @@ function wireSession(ses) {
     item.on('updated', (_, state) => update(state));
     item.once('done', (_, state) => {
       update(state);
+      saveDownloads();
       if (state !== 'completed') return;
       app.getFileIcon(download.path).then((img) => {
         download.icon = img.toDataURL();
+        saveDownloads();
         render();
       }, () => {});
     });
@@ -1533,7 +1538,7 @@ const actions = {
   retryDownload: (id) => {
     const download = downloads.find((d) => d.id === id);
     if (!download) return;
-    const ses = downloadItems.get(id)?.ses;
+    const ses = downloadItems.get(id)?.ses ?? currentContents()?.session; // entries from before a restart
     actions.removeDownload(id);
     ses?.downloadURL(download.url);
   },
@@ -1543,6 +1548,7 @@ const actions = {
     if (downloads[i].state === 'progressing') downloadItems.get(id)?.item.cancel();
     downloads.splice(i, 1);
     downloadItems.delete(id);
+    saveDownloads();
     render();
   },
   resetPermissions: () => {
@@ -1571,6 +1577,7 @@ const actions = {
   clearDownloads: () => {
     downloads.splice(0, downloads.length, ...downloads.filter((d) => d.state === 'progressing'));
     for (const id of [...downloadItems.keys()]) if (!downloads.some((d) => d.id === id)) downloadItems.delete(id);
+    saveDownloads();
     render();
   },
 };
@@ -1655,6 +1662,9 @@ function start() {
   if (!Array.isArray(history)) history = [];
   if (!Array.isArray(bookmarks)) bookmarks = [];
   for (const item of [...history, ...bookmarks]) item.favicon = safeIcon(item.favicon);
+  const savedDownloads = load('downloads.json', []);
+  if (Array.isArray(savedDownloads)) downloads.push(...savedDownloads.map((d) => ({ ...d, icon: safeIcon(d.icon), paused: false })));
+  nextDownloadId = Math.max(0, ...downloads.map((d) => d.id)) + 1;
   nativeTheme.themeSource = THEMES[settings.theme] ?? 'dark';
 
   const bounds = settings.bounds && onScreen(settings.bounds) ? settings.bounds : { width: 1280, height: 820 };
