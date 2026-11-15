@@ -28,8 +28,9 @@ function applyLang() {
   for (const key of Object.keys(rendered)) delete rendered[key];
 }
 
-function el(tag, props = {}, ...children) {
+function el(tag, { dataset, ...props } = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
+  Object.assign(node.dataset, dataset); // dataset itself cannot be assigned
   node.append(...children);
   return node;
 }
@@ -57,40 +58,48 @@ function icon(src, name, className) {
 
 // Reordering by dragging with the mouse. Plain mouse events, not HTML5 drag and drop: that one
 // needs an OS drag session, which did not start here. While a drag is on, re-renders are held
-// back, since replacing the nodes under the cursor would lose it.
+// back, since replacing the nodes under the cursor would lose it. The dragged item follows the
+// cursor and the others step aside; after the drop the item glides from where it was let go
+// into its new place (see glideDropped).
 let sorting = false;
+let dropped = null; // { key, rect } of the item just let go
 
 function sortable(nodes, axis, onMove) {
   const coord = (e) => (axis === 'x' ? e.clientX : e.clientY);
-  const middle = (node) => {
-    const r = node.getBoundingClientRect();
-    return axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2;
-  };
-  const clear = () => nodes.forEach((node) => node.classList.remove('drop-before', 'drop-after', 'dragged'));
+  const translate = (px) => (axis === 'x' ? `translateX(${px}px)` : `translateY(${px}px)`);
 
   nodes.forEach((node, from) => {
     node.addEventListener('mousedown', (down) => {
       if (down.button !== 0 || down.target.closest('.tab-close, .tab-audio')) return;
       const start = coord(down);
+      // Positions as they were before the drag: the moved nodes must not change the answer.
+      const rects = nodes.map((n) => n.getBoundingClientRect());
+      const middles = rects.map((r) => (axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2));
+      const step = axis === 'x' ? rects[from].width + 2 : rects[from].height + 8; // the size plus the gap
       let to = from; // insertion point in the list as it was before the drag
       const move = (e) => {
         if (!sorting && Math.abs(coord(e) - start) < 5) return;
+        if (!sorting) node.parentNode.classList.add('sorting');
         sorting = true;
-        to = nodes.findIndex((other) => coord(e) < middle(other));
+        to = middles.findIndex((m) => coord(e) < m);
         if (to < 0) to = nodes.length;
-        clear();
         node.classList.add('dragged');
-        if (to < nodes.length) nodes[to].classList.add('drop-before');
-        else nodes[nodes.length - 1].classList.add('drop-after');
+        node.style.transform = translate(coord(e) - start);
+        nodes.forEach((other, i) => {
+          if (other === node) return;
+          const shift = i > from && i < to ? -step : i >= to && i < from ? step : 0;
+          other.style.transform = shift ? translate(shift) : '';
+        });
       };
       const up = () => {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         if (!sorting) return;
         sorting = false;
-        clear();
+        node.parentNode.classList.remove('sorting');
         const target = to > from ? to - 1 : to;
-        if (target !== from) onMove(from, target);
+        dropped = { key: node.dataset.key, rect: node.getBoundingClientRect() };
+        if (target !== from) return onMove(from, target); // the new order arrives with the next state
         renderServices(true);
         renderTabs(true);
       };
@@ -100,16 +109,31 @@ function sortable(nodes, axis, onMove) {
   });
 }
 
+// The item let go glides from the drop point into its new slot.
+function glideDropped(container) {
+  const node = dropped && [...container.children].find((n) => n.dataset.key === dropped.key);
+  if (!node) return;
+  const now = node.getBoundingClientRect();
+  const { rect } = dropped;
+  dropped = null;
+  node.animate([{ transform: `translate(${rect.left - now.left}px, ${rect.top - now.top}px)` }, { transform: 'none' }],
+    { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' });
+}
+
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} ${t('mb')}`;
 
 /* ---------- Sidebar, tabs, toolbar ---------- */
 
 function serviceButton(s, hotkey) {
   return el('button', {
+    dataset: { key: s.id },
     className: 'service' + (s.id === state.activeService ? ' active' : '') + (s.neverUnload ? ' pinned' : '')
       + (s.sleeping ? ' sleeping' : '') + (s.parent ? ' section' : ''),
     title: withHotkey(s.sleeping ? `${s.label} (${t('sleepingHint')})` : s.label, hotkey),
-    onclick: () => send('selectService', s.id),
+    onclick: () => {
+      if (view) setView(null); // the snapshot under the panel would show the old page
+      send('selectService', s.id);
+    },
     oncontextmenu: () => send('serviceMenu', s.id),
   },
   icon(s.icon, s.name, 'service-icon'),
@@ -136,13 +160,55 @@ function renderServices(force) {
     return [topButtons[i], toggle, ...shown.map((s) => serviceButton(s, ''))];
   }));
   sortable(topButtons, 'y', (from, to) => send('moveService', { id: tops[from].id, to }));
+  glideDropped($('services'));
+  moveIndicator();
 }
+
+// The bar left of the active service: one element that slides from service to service.
+function moveIndicator() {
+  const active = $('services').querySelector('.service.active');
+  $('indicator').hidden = !active;
+  if (!active) return;
+  const r = active.getBoundingClientRect();
+  const visible = r.bottom > $('services').getBoundingClientRect().top && r.top < $('services').getBoundingClientRect().bottom;
+  $('indicator').style.transform = `translateY(${r.top + r.height / 2 - 12}px)`;
+  $('indicator').style.opacity = visible ? 1 : 0;
+}
+
+// A new tab grows in, a closed one shrinks away; switching to another service swaps the whole
+// strip at once. The strip is rebuilt on every change (a title, a favicon), so an animation
+// under way is carried on with a negative delay instead of starting over.
+const TAB_ANIMATION = 200; // ms, as in style.css
+let stripService = null;
+let tabOrder = []; // ids as last drawn
+const born = new Map(); // tab id -> when it appeared (0: was there already)
+const closing = new Map(); // tab id -> { node, at, index } while it shrinks away
 
 function renderTabs(force) {
   if (sorting || (!changed('tabs', state.tabs) && !force)) return;
-  $('tabs').replaceChildren(...state.tabs.map((tab) => el('div', {
+  const now = performance.now();
+  const sameService = stripService === state.activeService;
+  if (!sameService) {
+    born.clear();
+    closing.clear();
+  }
+  const ids = state.tabs.map((tab) => tab.id);
+  tabOrder.forEach((id, index) => {
+    if (sameService && !ids.includes(id) && !closing.has(id)) {
+      const node = [...$('tabs').children].find((n) => n.dataset.key === String(id));
+      if (!node) return;
+      closing.set(id, { node, at: now, index });
+      setTimeout(() => node.remove(), TAB_ANIMATION); // a timer: animationend is skipped when the window is hidden
+    }
+  });
+  for (const id of ids) if (!born.has(id)) born.set(id, sameService ? now : 0);
+  for (const id of born.keys()) if (!ids.includes(id)) born.delete(id);
+  stripService = state.activeService;
+  tabOrder = ids;
+  const nodes = state.tabs.map((tab) => el('div', {
+    dataset: { key: tab.id },
     className: 'tab' + (tab.active ? ' active' : '') + (tab.sleeping ? ' sleeping' : '') + (tab.unread ? ' unread' : '')
-      + (tab.pinned ? ' pinned' : ''),
+      + (tab.pinned ? ' pinned' : '') + (now - born.get(tab.id) < TAB_ANIMATION ? ' tab-new' : ''),
     title: tab.title,
     onclick: () => send('selectTab', tab.id),
     onmousedown: (e) => e.button === 1 && e.preventDefault(), // no autoscroll on middle click
@@ -168,8 +234,22 @@ function renderTabs(force) {
       e.stopPropagation();
       send('closeTab', tab.id);
     },
-  }))));
-  sortable([...$('tabs').children], 'x', (from, to) => send('moveTab', { id: state.tabs[from].id, to }));
+  })));
+  nodes.forEach((node, i) => (node.style.animationDelay = `${Math.min(0, born.get(ids[i]) - now)}ms`));
+  $('tabs').replaceChildren(...nodes);
+  // A closed tab: its old node stays in its place a moment, shrinking.
+  for (const [id, ghost] of closing) {
+    if (now - ghost.at >= TAB_ANIMATION) {
+      closing.delete(id);
+      continue;
+    }
+    ghost.node.classList.remove('tab-new', 'active');
+    ghost.node.classList.add('tab-closing');
+    ghost.node.style.animationDelay = `${ghost.at - now}ms`;
+    $('tabs').insertBefore(ghost.node, nodes[ghost.index] ?? null);
+  }
+  sortable(nodes, 'x', (from, to) => send('moveTab', { id: state.tabs[from].id, to }));
+  glideDropped($('tabs'));
 }
 
 function renderNav() {
@@ -204,6 +284,15 @@ function renderNav() {
   $('star').textContent = nav?.bookmarked ? '★' : '☆';
   $('star').classList.toggle('on', !!nav?.bookmarked);
   $('star').title = withHotkey(t(nav?.bookmarked ? 'removeBookmark' : 'addBookmark'), 'Ctrl+D');
+  // A thin bar under the toolbar while the page loads: it creeps on, then fills up and fades.
+  const bar = $('load-bar');
+  if (nav?.loading && bar.className !== 'loading') {
+    bar.className = '';
+    void bar.offsetWidth; // from zero, without a transition
+    bar.className = 'loading';
+  } else if (!nav?.loading && bar.className === 'loading') {
+    bar.className = 'done';
+  }
   if (document.activeElement !== $('address')) $('address').value = nav?.url ?? '';
   const active = state.downloads.filter((d) => d.state === 'progressing');
   $('dl-badge').hidden = !active.length;
@@ -213,7 +302,17 @@ function renderNav() {
   const received = active.reduce((sum, d) => sum + d.received, 0);
   $('downloads-btn').classList.toggle('busy', active.length > 0);
   $('downloads-btn').style.setProperty('--p', total ? received / total : 1);
+  // The button flashes when a file finishes (not for the ones already done at startup).
+  const done = state.downloads.filter((d) => d.state === 'completed').map((d) => d.id);
+  if (finished && done.some((id) => !finished.has(id))) {
+    $('downloads-btn').classList.remove('flash');
+    void $('downloads-btn').offsetWidth;
+    $('downloads-btn').classList.add('flash');
+  }
+  finished = new Set(done);
 }
+
+let finished = null; // ids of completed downloads at the last render
 
 /* ---------- Split view chrome ---------- */
 
@@ -275,18 +374,59 @@ const TITLES = {
   add: 'newService', settings: 'settings', downloads: 'downloads', extensions: 'extensions', history: 'history', bookmarks: 'bookmarks', edit: 'editService',
 };
 
+// The panel lies over the pages. They are native views drawn above this document, so main.js
+// first sends a snapshot of each (see 'shots'); the panel slides in over those and the views are
+// hidden. Closing slides it out first and then lets main.js show the views again.
+let closingPanel = 0;
+
 function setView(next) {
+  if (next === view) return;
+  const was = view;
   view = next;
-  document.body.classList.toggle('panel-open', !!view);
-  send('panel', view);
   rendered.view = null;
+  if (view) send('panel', view);
+  if (view && was) return renderPanel(); // another view in the open panel
+  if (view) {
+    // Reopened while sliding out: the views are still hidden, no new snapshots come.
+    if (closingPanel) showPanel();
+    clearTimeout(closingPanel);
+    closingPanel = 0;
+    return; // otherwise shown once the snapshots are in
+  }
+  document.body.classList.remove('panel-open');
+  closingPanel = setTimeout(() => {
+    closingPanel = 0;
+    $('panel').hidden = true;
+    $('backdrop').hidden = true;
+    send('panel', null);
+    setTimeout(() => !view && $('shots').replaceChildren(), 150); // once the live pages are back
+  }, 180);
+}
+
+function showPanel() {
+  $('panel').hidden = false;
+  $('backdrop').hidden = false;
   renderPanel();
+  void $('panel').offsetWidth; // the closed position first, so the slide runs
+  document.body.classList.add('panel-open');
 }
 
 const toggleView = (next) => setView(view === next ? null : next);
 
+on('shots', (shots) => {
+  if (!view) return;
+  $('shots').replaceChildren(...shots.map((s) => {
+    const img = el('img', { src: s.src, alt: '' });
+    Object.assign(img.style, { left: `${s.x}px`, top: `${s.y}px`, width: `${s.width}px`, height: `${s.height}px` });
+    return img;
+  }));
+  showPanel();
+  if (view === 'edit') $('edit-name').focus();
+  // Two frames: the snapshots are on screen before the live pages go.
+  requestAnimationFrame(() => requestAnimationFrame(() => send('panelCover')));
+});
+
 function renderPanel() {
-  $('panel').hidden = !view;
   const data = [view, editing, state.services, state.presets, state.settings, state.downloads, state.extensions, state.history, state.bookmarks];
   if (!view || !changed('view', data)) return;
   $('panel-title').textContent = t(TITLES[view]).replace(/…$/, ''); // a menu item's "…" is not part of the title
@@ -314,7 +454,11 @@ function renderLinks(box, list, removeAction, empty, withTime) {
   box.replaceChildren(...list.map((item) => el('div', {
     className: 'service-row link-row',
     title: item.url,
-    onclick: (e) => send(e.ctrlKey ? 'openUrlInBackground' : 'openUrl', item.url),
+    onclick: (e) => {
+      if (e.ctrlKey) return send('openUrlInBackground', item.url);
+      setView(null); // the page opens under the panel
+      send('openUrl', item.url);
+    },
     onmousedown: (e) => e.button === 1 && e.preventDefault(), // no autoscroll on middle click
     onauxclick: (e) => e.button === 1 && send('openUrlInBackground', item.url),
   },
@@ -478,8 +622,16 @@ function closeFind() {
 /* ---------- Wiring ---------- */
 
 on('state', (next) => {
+  // Another page on screen (a hotkey, a link from another app): the snapshot under the panel is stale.
+  if (view && state && next.nav?.contentsId !== state.nav?.contentsId) setView(null);
+  // A theme change fades the colours over instead of switching at once.
+  const html = document.documentElement;
+  if (state && html.dataset.theme !== next.settings.theme) {
+    html.classList.add('theming');
+    setTimeout(() => html.classList.remove('theming'), 400);
+  }
   state = next;
-  document.documentElement.dataset.theme = state.settings.theme;
+  html.dataset.theme = state.settings.theme;
   if (state.settings.lang !== lang) {
     lang = state.settings.lang;
     applyLang();
@@ -510,6 +662,9 @@ on('find-result', (r) => {
 for (const [code, label] of Object.entries(LANGS)) $('lang').add(new Option(label, code));
 $('lang').onchange = (e) => send('setting', { key: 'lang', value: e.target.value });
 
+$('services').onscroll = moveIndicator;
+window.addEventListener('resize', moveIndicator);
+$('backdrop').onclick = () => setView(null);
 $('add-btn').onclick = () => toggleView('add');
 $('settings-btn').onclick = () => toggleView('settings');
 $('downloads-btn').onclick = () => toggleView('downloads');

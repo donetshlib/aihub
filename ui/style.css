@@ -58,10 +58,6 @@ html[data-theme="light"] {
   --danger: #dc2626;
 }
 
-body.panel-open {
-  --left: calc(var(--sidebar-w) + var(--panel-w));
-}
-
 * {
   box-sizing: border-box;
   scrollbar-width: thin;
@@ -89,6 +85,11 @@ button {
   border: none;
   border-radius: 8px;
   cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s, transform 0.1s;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
 button:disabled {
@@ -167,7 +168,7 @@ select:focus {
   align-items: center;
   justify-content: center;
   opacity: 0.65;
-  transition: transform 0.12s ease, opacity 0.12s ease;
+  transition: transform 0.15s ease, opacity 0.15s ease, background-color 0.15s, border-color 0.2s, box-shadow 0.2s;
 }
 
 .service:hover {
@@ -182,17 +183,19 @@ select:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-/* Bar on the left of the active service: the border alone is hard to see on colourful favicons. */
-.service.active::before {
-  content: "";
+/* Bar on the left of the active service: the border alone is hard to see on colourful favicons.
+   One element for the sidebar, it slides to the service picked. */
+#indicator {
   position: absolute;
-  left: -10px;
-  top: 50%;
+  top: 0;
+  left: 0;
+  z-index: 1;
   width: 4px;
   height: 24px;
-  transform: translateY(-50%);
   border-radius: 0 3px 3px 0;
   background: var(--accent);
+  pointer-events: none;
+  transition: transform 0.25s cubic-bezier(.2, .8, .2, 1), opacity 0.15s;
 }
 
 .service.pinned::after {
@@ -283,17 +286,28 @@ select:focus {
   background: var(--surface-hover);
 }
 
-/* Drop marker while reordering by drag and drop. */
-#services .service.drop-before { box-shadow: 0 -4px 0 -1px var(--accent); }
-#services .service.drop-after { box-shadow: 0 4px 0 -1px var(--accent); }
-#tabs .tab.drop-before { box-shadow: inset 3px 0 0 var(--accent); }
-#tabs .tab.drop-after { box-shadow: inset -3px 0 0 var(--accent); }
-.dragged { opacity: 0.45; }
+/* Reordering by drag: the dragged item rides on the cursor, the others step aside. */
+.sorting > * {
+  transition: transform 0.18s cubic-bezier(.2, .8, .2, 1);
+}
+
+.sorting > .dragged {
+  position: relative;
+  z-index: 2;
+  transition: none;
+  opacity: 0.92;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+}
+
+#tabs.sorting > .dragged {
+  background: var(--surface-hover);
+}
 
 /* ---------- Tab strip and toolbar ---------- */
 
 #topbar {
   position: fixed;
+  z-index: 1;
   top: 0;
   left: var(--left);
   right: 0;
@@ -327,6 +341,25 @@ select:focus {
   border-radius: 10px 10px 0 0;
   color: var(--text-dim);
   cursor: default;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+/* A new tab grows in, a closed one shrinks away (TAB_ANIMATION in app.js). */
+.tab.tab-new {
+  animation: tab-in 0.2s cubic-bezier(.2, .8, .2, 1) backwards;
+}
+
+.tab.tab-closing {
+  pointer-events: none;
+  animation: tab-out 0.2s ease-in forwards;
+}
+
+@keyframes tab-in {
+  from { flex-basis: 0; min-width: 0; padding: 0; opacity: 0; }
+}
+
+@keyframes tab-out {
+  to { flex-basis: 0; min-width: 0; padding: 0; opacity: 0; }
 }
 
 .tab:hover {
@@ -403,6 +436,30 @@ select:focus {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Page load progress: creeps towards 85 % while loading, fills up and fades when done. */
+#load-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#load-bar.loading {
+  width: 85%;
+  opacity: 1;
+  transition: width 8s cubic-bezier(.08, .7, .2, 1);
+}
+
+#load-bar.done {
+  width: 100%;
+  opacity: 0;
+  transition: width 0.2s ease-out, opacity 0.3s 0.2s;
 }
 
 #navbar {
@@ -551,8 +608,27 @@ body.dragging {
 
 /* ---------- Side panel ---------- */
 
+/* The panel lies over the pages (snapshots of them, see 'shots' in app.js), behind a dimmed backdrop. */
+#shots img {
+  position: fixed;
+}
+
+#backdrop {
+  position: fixed;
+  inset: 0 0 0 var(--sidebar-w);
+  z-index: 5;
+  background: rgb(0 0 0 / 0.4);
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+
+#sidebar {
+  z-index: 6;
+}
+
 #panel {
   position: fixed;
+  z-index: 7;
   top: 0;
   bottom: 0;
   left: var(--sidebar-w);
@@ -561,11 +637,20 @@ body.dragging {
   flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--border);
-  animation: slide 0.16s ease-out;
+  box-shadow: 8px 0 32px rgb(0 0 0 / 0.35);
+  transform: translateX(-100%);
+  opacity: 0;
+  transition: transform 0.18s ease-in, opacity 0.18s ease-in;
 }
 
-@keyframes slide {
-  from { transform: translateX(-12px); opacity: 0; }
+body.panel-open #panel {
+  transform: none;
+  opacity: 1;
+  transition: transform 0.24s cubic-bezier(.2, .8, .2, 1), opacity 0.16s;
+}
+
+body.panel-open #backdrop {
+  opacity: 1;
 }
 
 #panel header {
@@ -924,6 +1009,16 @@ body.dragging {
   height: 2px;
   border-radius: 1px;
   background: var(--accent);
+  transition: transform 0.3s;
+}
+
+/* A download finished. */
+#downloads-btn.flash {
+  animation: flash 0.9s ease-out;
+}
+
+@keyframes flash {
+  0% { background: var(--accent); color: var(--accent-text); transform: scale(1.15); }
 }
 
 .dl-actions button,
@@ -1070,6 +1165,14 @@ html.suggest-page body {
   background: transparent;
 }
 
+#suggest-list.enter {
+  animation: drop 0.14s ease-out;
+}
+
+@keyframes drop {
+  from { transform: translateY(-6px); opacity: 0; }
+}
+
 #suggest-list {
   padding: 6px;
   border: 1px solid var(--border);
@@ -1086,6 +1189,7 @@ html.suggest-page body {
   padding: 0 10px;
   border-radius: 8px;
   cursor: pointer;
+  transition: background-color 0.12s;
 }
 
 .suggestion:hover,
@@ -1197,4 +1301,27 @@ html.suggest-page body {
 
 #reader.on {
   background: var(--surface-hover);
+}
+
+/* Theme change: the colours fade over (the class is on for 0.4 s). */
+html.theming *,
+html.theming *::before,
+html.theming *::after {
+  transition: background-color 0.35s, color 0.35s, border-color 0.35s !important;
+}
+
+/* Windows "Show animations" off: no motion. Durations stay above zero so animationend still fires. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+/* The bar would point at the wrong slot while services are dragged. */
+#sidebar:has(#services.sorting) #indicator {
+  opacity: 0 !important;
 }

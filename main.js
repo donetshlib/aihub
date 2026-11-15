@@ -17,7 +17,6 @@ const SIDEBAR = 56;
 const TOPBAR = 80;
 const PANE_HEAD = 28;
 const GAP = 6;
-const PANEL = 380;
 const MAX_PANES = 3;
 const ERROR_PAGE = path.join(__dirname, 'ui', 'error.html');
 const NEW_TAB = path.join(__dirname, 'ui', 'newtab.html');
@@ -68,11 +67,13 @@ let panes = []; // tab ids shown side by side
 let fractions = [];
 let focused = 0;
 let panelOpen = false;
+let panelCovered = false; // the panel is drawn over snapshots of the pages, the page views are hidden
 let panelView = null; // which side panel view is open: the history and bookmark lists are sent only for it
 let history = []; // visited pages, newest first, one entry per URL
 let historyDirty = false;
 let historyQuery = '';
 let bookmarks = [];
+let suggestFresh = false; // the list was hidden: it slides in
 let suggestView = null; // address bar suggestions, a view of its own to sit above the tab views
 let suggestions = [];
 let selectedSuggestion = -1;
@@ -492,6 +493,7 @@ function showSuggestions() {
   const rect = suggestRect;
   ui.send('suggestions', suggestions.length);
   if (!suggestions.length) return suggestView?.setVisible(false);
+  suggestFresh = !suggestView.getVisible();
   win.contentView.addChildView(suggestView); // again: brings it above tab views made since
   suggestView.setBounds({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: suggestions.length * 44 + 14 });
   suggestView.setVisible(true);
@@ -511,7 +513,8 @@ function createSuggestView() {
 }
 
 function sendSuggestions() {
-  suggestView.webContents.send('suggestions', { list: suggestions, selected: selectedSuggestion, theme: settings.theme, lang: settings.lang });
+  suggestView.webContents.send('suggestions', { list: suggestions, selected: selectedSuggestion, theme: settings.theme, lang: settings.lang, fresh: suggestFresh });
+  suggestFresh = false;
 }
 
 function pickSuggestion(i) {
@@ -543,7 +546,7 @@ function removePane(i) {
 
 function layout() {
   const [width, height] = win.getContentSize();
-  const left = SIDEBAR + (panelOpen ? PANEL : 0);
+  const left = SIDEBAR;
   const top = TOPBAR + (panes.length > 1 ? PANE_HEAD : 0);
   const usable = width - left - GAP * (panes.length - 1);
   let x = left;
@@ -570,7 +573,7 @@ function layout() {
     const view = ensureView(tab);
     const full = tab === fullscreenTab;
     view.setBounds(full ? { x: 0, y: 0, width, height } : rects[i]);
-    view.setVisible(!fullscreenTab || full);
+    view.setVisible(full || (!fullscreenTab && !panelCovered));
     if (full) win.contentView.addChildView(view); // above the other panes and the suggestions
     if (full && fullscreenNotice) {
       win.contentView.addChildView(fullscreenNotice);
@@ -1374,10 +1377,32 @@ const actions = {
     fractions = values.map((v) => v / sum);
     render();
   },
-  panel: (open) => {
+  // The page views are native and would cover anything drawn by the UI. On opening, the UI gets
+  // a snapshot of each pane to show under the panel, then says when to hide the views.
+  panel: async (open) => {
+    const opening = !!open && !panelOpen;
     panelOpen = !!open;
     panelView = typeof open === 'string' ? open : null;
+    if (!panelOpen && panelCovered) {
+      panelCovered = false;
+      render();
+      currentContents()?.focus();
+      return;
+    }
     render();
+    if (!opening) return;
+    const rects = layout();
+    const shots = await Promise.all(panes.map(async (id, i) => {
+      const image = await tabs.get(id)?.view?.webContents.capturePage().catch(() => null);
+      return image && !image.isEmpty() ? { ...rects[i], src: `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}` } : null;
+    }));
+    if (panelOpen) ui.send('shots', shots.filter(Boolean));
+  },
+  panelCover: () => {
+    if (!panelOpen) return;
+    panelCovered = true;
+    render();
+    ui.focus(); // the hidden page would keep the keyboard, Esc must reach the panel
   },
   suggest,
   suggestSelect: (i) => {

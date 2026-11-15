@@ -2,10 +2,21 @@
 // address bar of the main window.
 const { send, on } = window.hub;
 
-on('suggestions', ({ list, selected, theme, lang }) => {
+let shown = ''; // the list on screen: moving the selection only moves the highlight
+
+on('suggestions', ({ list, selected, theme, lang, fresh }) => {
   document.documentElement.dataset.theme = theme;
+  const box = document.getElementById('suggest-list');
+  if (fresh) {
+    box.classList.remove('enter');
+    void box.offsetWidth; // restarts the slide-in
+    box.classList.add('enter');
+  }
+  const key = JSON.stringify([list, lang]);
+  if (key === shown) return [...box.children].forEach((row, i) => row.classList.toggle('selected', i === selected));
+  shown = key;
   const tags = { tab: (s) => `${translate(lang, 'openTab')} · ${s.service}`, bookmark: () => '★', history: () => '', search: () => '', service: () => '' };
-  document.getElementById('suggest-list').replaceChildren(...list.map((s, i) => {
+  box.replaceChildren(...list.map((s, i) => {
     const row = document.createElement('div');
     row.className = 'suggestion' + (i === selected ? ' selected' : '');
     // mousedown: on click the address bar has already lost the focus and hidden this list.
