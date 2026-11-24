@@ -112,9 +112,17 @@ function load(name, fallback) {
   }
 }
 
+// Flushed to disk before the rename: otherwise a power cut can keep the rename but lose the data,
+// leaving an empty or zero-filled file in place of the old one.
 function save(name, data) {
   const file = dataFile(name);
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2));
+  const fd = fs.openSync(`${file}.tmp`, 'w');
+  try {
+    fs.writeFileSync(fd, JSON.stringify(data, null, 2));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(`${file}.tmp`, file);
 }
 
@@ -1644,11 +1652,12 @@ function start() {
     setInterval(check, 6 * 3600_000);
   }
   // Ghostery's ad and tracker lists, uBlock's taken straight from uBlock (Ghostery's copies lag behind,
-  // and YouTube changes often), plus AdGuard Base in uBlock syntax. Fetched again when the cache is a
-  // day old, the cache is the fallback offline. Sessions wired before it loads get it here.
-  const cache = path.join(app.getPath('userData'), 'adblock.bin');
+  // and YouTube changes often), plus AdGuard Base, Russian and Ukrainian in uBlock syntax (the regional
+  // ones cover sites like rezka). Fetched again when the cache is a day old, the cache is the fallback
+  // offline. Sessions wired before it loads get it here. A new cache name drops a cache of other lists.
+  const cache = path.join(app.getPath('userData'), 'adblock2.bin');
   const lists = [...adsAndTrackingLists.map((url) => url.replace(/.*\/ublock-origin\//,'https://ublockorigin.github.io/uAssets/filters/')),
-    'https://filters.adtidy.org/extension/ublock/filters/2.txt'];
+    ...[2, 1, 23].map((id) => `https://filters.adtidy.org/extension/ublock/filters/${id}.txt`)];
   const cached = () => ElectronBlocker.fromLists(webFetch, lists, {}, { path: cache, read: fs.promises.readFile, write: fs.promises.writeFile });
   const age = Date.now() - (fs.statSync(cache, { throwIfNoEntry: false })?.mtimeMs ?? 0);
   (age < 86400_000 ? cached() : ElectronBlocker.fromLists(webFetch, lists)
