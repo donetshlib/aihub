@@ -181,6 +181,7 @@ function moveIndicator() {
 const TAB_ANIMATION = 200; // ms, as in style.css
 let stripService = null;
 let tabOrder = []; // ids as last drawn
+let shownActive = null; // key of the active tab last scrolled into sight
 const born = new Map(); // tab id -> when it appeared (0: was there already)
 const closing = new Map(); // tab id -> { node, at, index } while it shrinks away
 
@@ -250,6 +251,10 @@ function renderTabs(force) {
   }
   sortable(nodes, 'x', (from, to) => send('moveTab', { id: state.tabs[from].id, to }));
   glideDropped($('tabs'));
+  // A newly active tab is scrolled into sight; other updates leave the scroll where the user put it.
+  const active = nodes.find((n) => n.classList.contains('active'));
+  if (active && active.dataset.key !== shownActive) active.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  shownActive = active?.dataset.key;
 }
 
 function renderNav() {
@@ -663,6 +668,8 @@ for (const [code, label] of Object.entries(LANGS)) $('lang').add(new Option(labe
 $('lang').onchange = (e) => send('setting', { key: 'lang', value: e.target.value });
 
 $('services').onscroll = moveIndicator;
+// Tabs that do not fit scroll sideways, by the mouse wheel as in Chrome.
+$('tabs').onwheel = (e) => ($('tabs').scrollLeft += e.deltaY || e.deltaX);
 window.addEventListener('resize', moveIndicator);
 $('backdrop').onclick = () => setView(null);
 $('add-btn').onclick = () => toggleView('add');

@@ -327,7 +327,8 @@ select:focus {
   display: flex;
   gap: 2px;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: auto; /* tabs that do not fit scroll, see onwheel in app.js */
+  scrollbar-width: none;
 }
 
 .tab {
